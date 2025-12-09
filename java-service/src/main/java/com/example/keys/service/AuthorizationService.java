@@ -102,38 +102,62 @@ public class AuthorizationService {
                 return result;
             }
             
-            // 检查使用次数
-            if (licenseCode.getIssueCount() >= licenseCode.getIssueLimit()) {
-                result.put("ok", false);
-                result.put("error", "激活码使用次数已达上限");
-                result.put("code", 403);
-                return result;
+            // 2. 检查是否已存在此激活码的许可证
+            // ✅ 允许多次激活，但需间隔1小时，再次激活后旧设备失效
+            Optional<License> existingLicenseByCode = licenseRepository.findByCode(code);
+            if (existingLicenseByCode.isPresent()) {
+                License existingLicense = existingLicenseByCode.get();
+                
+                // 检查上次激活时间，必须间隔1小时以上（无论是否同一设备）
+                LocalDateTime lastActivated = existingLicense.getUpdatedAt() != null ? 
+                    existingLicense.getUpdatedAt() : existingLicense.getValidFrom();
+                LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
+                
+                // 同一设备同一激活码，且未过期，检查是否在1小时内
+                if (hwid.equals(existingLicense.getHwid())) {
+                    if ("ok".equals(existingLicense.getStatus()) && existingLicense.getValidTo().isAfter(LocalDateTime.now())) {
+                        // 同一设备，直接返回现有许可证（无需等待1小时）
+                        Map<String, Object> serverBindingResult = serverManagementService.checkServerBinding(code, hwid, serverIp);
+                        if (!(Boolean) serverBindingResult.get("ok")) {
+                            return serverBindingResult;
+                        }
+                        
+                        result.put("ok", true);
+                        result.put("license", buildLicenseResponse(existingLicense));
+                        result.put("plan", buildPlanResponse(existingLicense));
+                        result.put("quota", buildQuotaResponse(existingLicense));
+                        result.put("valid_from", existingLicense.getValidFrom());
+                        result.put("valid_to", existingLicense.getValidTo());
+                        result.put("existing", true);
+                        result.put("server_action", serverBindingResult.get("action"));
+                        result.put("server_message", serverBindingResult.get("message"));
+                        return result;
+                    }
+                } else {
+                    // 不同设备 - 检查是否间隔1小时
+                    if (lastActivated.isAfter(oneHourAgo)) {
+                        // 距离上次激活不足1小时
+                        long minutesRemaining = java.time.Duration.between(LocalDateTime.now(), lastActivated.plusHours(1)).toMinutes();
+                        result.put("ok", false);
+                        result.put("error", "距离上次激活不足1小时，请" + Math.max(1, minutesRemaining) + "分钟后再试");
+                        result.put("code", 403);
+                        return result;
+                    }
+                }
+                
+                // ✅ 无论是否同一设备，都吊销旧许可证，创建新的
+                // 这样可以确保只有一个有效的许可证
+                licenseRepository.revokeByCode(code, "被新激活替换，新设备hwid: " + hwid + "，新服务器IP: " + serverIp);
+                
+                // 记录审计日志
+                auditLogRepository.insert(new AuditLog(
+                    "system", "license_replaced", 
+                    "license:" + existingLicense.getId(),
+                    "旧许可证被替换，旧设备：" + existingLicense.getHwid() + "，新设备：" + hwid + "，新服务器：" + serverIp
+                ));
             }
             
-            // 2. 检查是否已在此设备激活
-            Optional<License> existingLicense = licenseRepository.findByCodeAndHwid(code, hwid);
-            if (existingLicense.isPresent()) {
-                License license = existingLicense.get();
-                if ("ok".equals(license.getStatus()) && license.getValidTo().isAfter(LocalDateTime.now())) {
-                    // 已激活的许可证，检查服务器IP绑定
-                    Map<String, Object> serverBindingResult = serverManagementService.checkServerBinding(code, hwid, serverIp);
-                    if (!(Boolean) serverBindingResult.get("ok")) {
-                        return serverBindingResult; // 返回服务器绑定检查的错误结果
-                    }
-                    
-                    // 服务器绑定检查通过，返回现有许可证
-                    result.put("ok", true);
-                    result.put("license", buildLicenseResponse(license));
-                    result.put("plan", buildPlanResponse(license));
-                    result.put("quota", buildQuotaResponse(license));
-                    result.put("valid_from", license.getValidFrom());
-                    result.put("valid_to", license.getValidTo());
-                    result.put("existing", true);
-                    result.put("server_action", serverBindingResult.get("action"));
-                    result.put("server_message", serverBindingResult.get("message"));
-                    return result;
-                }
-            }
+            // ✅ 注意：不再检查 issue_limit，允许无限次激活（每次激活使旧的失效）
             
             // 3. 获取套餐信息
             Optional<Plan> planOpt = planRepository.findById(licenseCode.getPlanId());
