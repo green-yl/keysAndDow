@@ -121,11 +121,15 @@ async function loadCodes() {
         codes.forEach(code => {
             const row = document.createElement('tr');
             const statusBadge = getStatusBadge(code.status);
+            // 显示激活次数（允许多次激活，每次间隔1小时）
+            const activationInfo = code.issueCount > 0 
+                ? `<span class="badge bg-info">已激活 ${code.issueCount} 次</span>` 
+                : '<span class="badge bg-secondary">未激活</span>';
             
             row.innerHTML = `
                 <td><code>${code.code}</code></td>
                 <td>${code.planName || 'Unknown'}</td>
-                <td>${code.issueCount}/${code.issueLimit}</td>
+                <td>${activationInfo}</td>
                 <td>${formatDateTime(code.expAt)}</td>
                 <td>${statusBadge}</td>
                 <td>${code.note || '-'}</td>
@@ -155,12 +159,13 @@ async function loadLicenses() {
         licenses.forEach(license => {
             const row = document.createElement('tr');
             const statusBadge = getStatusBadge(license.status);
+            const serverIp = license.serverIp || '-';
             
             row.innerHTML = `
                 <td>${license.id}</td>
                 <td><code>${license.code}</code></td>
-                <td>${license.sub}</td>
-                <td><small>${license.hwid.substring(0, 16)}...</small></td>
+                <td><code>${serverIp}</code></td>
+                <td><small>${license.hwid ? license.hwid.substring(0, 16) + '...' : '-'}</small></td>
                 <td>${license.planName || 'Unknown'}</td>
                 <td>${formatDateTime(license.validFrom)} ~ ${formatDateTime(license.validTo)}</td>
                 <td>${license.downloadQuotaRemaining}/${license.downloadQuotaTotal}</td>
