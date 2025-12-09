@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  keys-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: keysAndDwd-service
+    ports:
+      - "3003:3003"
+    environment:
+      - SERVER_PORT=3003
+      - SPRING_DATASOURCE_URL=jdbc:sqlite:file:/app/data/database.sqlite
+      - SPRING_SQL_INIT_MODE=always
+      - APP_CORS_ALLOWED_ORIGINS=*
+      - APP_SECURITY_REQUIRE_API_KEY=false
+      - APP_LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY:-}
+      - APP_LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY:-}
+    volumes:
+      # 数据持久化
+      - ./data:/app/data
+      # 源码文件存储
+      - ./sources:/app/sources
+      # 临时上传目录
+      - ./temp-uploads:/app/temp-uploads
+      # 日志
+      - ./logs:/app/logs
+      # 配置
+      - ./configs:/app/configs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  keys_data:
+    driver: local
+

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CORS测试</title>
+</head>
+<body>
+    <h1>CORS测试</h1>
+    <button onclick="testCors()">测试CORS</button>
+    <div id="result"></div>
+
+    <script>
+        async function testCors() {
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                console.log('开始测试CORS...');
+                
+                // 测试OPTIONS预检请求
+                const optionsResponse = await fetch('http://localhost:3003/api/test/cors', {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'Content-Type'
+                    }
+                });
+                
+                console.log('OPTIONS响应状态:', optionsResponse.status);
+                console.log('OPTIONS响应头:', [...optionsResponse.headers.entries()]);
+                
+                // 测试实际请求
+                const response = await fetch('http://localhost:3003/api/test/cors', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                console.log('GET响应状态:', response.status);
+                console.log('GET响应头:', [...response.headers.entries()]);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    resultDiv.innerHTML = `<pre style="color: green;">✅ CORS测试成功!\n${JSON.stringify(data, null, 2)}</pre>`;
+                } else {
+                    resultDiv.innerHTML = `<pre style="color: red;">❌ 响应错误: ${response.status}</pre>`;
+                }
+                
+            } catch (error) {
+                console.error('CORS错误:', error);
+                resultDiv.innerHTML = `<pre style="color: red;">❌ CORS错误: ${error.message}</pre>`;
+            }
+        }
+    </script>
+</body>
+</html>

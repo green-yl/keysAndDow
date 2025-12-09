@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>授权系统测试Demo</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .demo-section {
+            margin-bottom: 2rem;
+            padding: 1.5rem;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: #f8f9fa;
+        }
+        .code-display {
+            background: #f1f3f4;
+            padding: 1rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .status-success {
+            color: #198754;
+        }
+        .status-error {
+            color: #dc3545;
+        }
+        .btn-demo {
+            margin: 0.25rem;
+        }
+        .progress-section {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="text-center mb-4">
+                    <i class="bi bi-shield-check text-primary"></i>
+                    授权系统测试Demo
+                </h1>
+            </div>
+        </div>
+
+        <!-- 步骤1: 生成激活码 -->
+        <div class="demo-section">
+            <h3><i class="bi bi-1-circle text-primary"></i> 步骤1: 生成激活码</h3>
+            <p class="text-muted">从现有套餐创建一个测试用的激活码</p>
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle"></i>
+                <strong>注意：</strong>如果没有可用套餐，请先访问 <a href="/admin.html" target="_blank">管理后台</a> 创建套餐
+            </div>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">卡类型</label>
+                        <select class="form-select" id="cardType">
+                            <option value="week">周卡 (7天15次)</option>
+                            <option value="month">月卡 (30天30次)</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary btn-demo" onclick="generateCode()">
+                        <i class="bi bi-plus"></i> 生成激活码
+                    </button>
+                </div>
+                <div class="col-md-6">
+                    <div id="generatedCode" class="code-display">点击"生成激活码"按钮创建测试激活码</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 步骤2: 激活许可证 -->
+        <div class="demo-section">
+            <h3><i class="bi bi-2-circle text-primary"></i> 步骤2: 激活许可证</h3>
+            <p class="text-muted">使用激活码激活许可证，系统会自动绑定当前服务器IP</p>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">激活码</label>
+                        <input type="text" class="form-control" id="activationCode" placeholder="请输入激活码">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">设备ID (HWID)</label>
+                        <input type="text" class="form-control" id="hwid" readonly>
+                        <small class="text-muted">自动生成的唯一设备标识</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">客户标识</label>
+                        <input type="text" class="form-control" id="clientId" placeholder="可选，留空自动生成">
+                    </div>
+                    <button class="btn btn-success btn-demo" onclick="activateLicense()">
+                        <i class="bi bi-key"></i> 激活许可证
+                    </button>
+                </div>
+                <div class="col-md-6">
+                    <div id="licenseResult" class="code-display">许可证信息将在这里显示</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 步骤3: 查看许可证状态 -->
+        <div class="demo-section">
+            <h3><i class="bi bi-3-circle text-primary"></i> 步骤3: 查看许可证状态</h3>
+            <p class="text-muted">检查许可证的当前状态、剩余额度和服务器绑定状态</p>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <button class="btn btn-info btn-demo" onclick="checkLicenseStatus()">
+                        <i class="bi bi-info-circle"></i> 查看许可证状态
+                    </button>
+                    <button class="btn btn-warning btn-demo" onclick="checkServerBinding()">
+                        <i class="bi bi-server"></i> 检查服务器绑定
+                    </button>
+                </div>
+                <div class="col-md-6">
+                    <div id="statusResult" class="code-display">许可证状态将在这里显示</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 步骤4: 获取源码列表 -->
+        <div class="demo-section">
+            <h3><i class="bi bi-4-circle text-primary"></i> 步骤4: 获取源码列表</h3>
+            <p class="text-muted">查看可下载的源码</p>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <button class="btn btn-info btn-demo" onclick="loadSourceList()">
+                        <i class="bi bi-list"></i> 获取源码列表
+                    </button>
+                </div>
+                <div class="col-md-6">
+                    <div id="sourceListResult" class="code-display">源码列表将在这里显示</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 步骤5: 下载源码 -->
+        <div class="demo-section">
+            <h3><i class="bi bi-5-circle text-primary"></i> 步骤5: 下载源码</h3>
+            <p class="text-muted">选择源码进行授权下载，所有下载都需要许可证验证</p>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label">选择源码</label>
+                        <select class="form-select" id="sourceSelect">
+                            <option value="">请先获取源码列表</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-success btn-demo" onclick="downloadSourceWithAuth()">
+                        <i class="bi bi-shield-check"></i> 授权下载
+                    </button>
+                    <button class="btn btn-warning btn-demo" onclick="simulateDownload()">
+                        <i class="bi bi-play-circle"></i> 模拟测试流程
+                    </button>
+                </div>
+                <div class="col-md-6">
+                    <div id="downloadResult" class="code-display">下载结果将在这里显示</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 测试总结 -->
+        <div class="demo-section">
+            <h3><i class="bi bi-clipboard-check text-success"></i> 测试总结</h3>
+            <div class="row">
+                <div class="col-md-6">
+                    <button class="btn btn-secondary btn-demo" onclick="resetDemo()">
+                        <i class="bi bi-arrow-clockwise"></i> 重置测试
+                    </button>
+                    <button class="btn btn-primary btn-demo" onclick="autoTest()">
+                        <i class="bi bi-play-circle"></i> 自动测试流程
+                    </button>
+                </div>
+                <div class="col-md-6">
+                    <div id="summaryResult" class="code-display">测试总结将在这里显示</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 进度指示器 -->
+        <div class="progress-section" id="progressSection">
+            <div class="d-flex justify-content-center">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <span class="ms-2">正在处理...</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="demo.js"></script>
+</body>
+</html>

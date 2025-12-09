@@ -1,0 +1,42 @@
+# Node
+node_modules/
+package-lock.json
+
+# Logs
+logs/
+*.log
+
+# Database
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+database-backups/
+
+# Temp
+temp-uploads/
+sources/uploaded/*
+sources/extracted/*
+sources/thumbnails/*
+!sources/uploaded/.gitkeep
+!sources/extracted/.gitkeep
+!sources/thumbnails/.gitkeep
+
+# Java build
+java-service/target/
+*.class
+*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config secrets
+configs/ssl/*.key
+configs/ssl/*.crt
+

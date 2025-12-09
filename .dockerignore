@@ -1,0 +1,28 @@
+# 忽略不需要的文件
+node_modules/
+*.log
+logs/
+temp-uploads/
+database.sqlite
+database.sqlite-shm
+database.sqlite-wal
+database-backups/
+.git/
+.gitignore
+*.md
+test-cors.html
+
+# Java 构建产物
+java-service/target/
+*.class
+*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+

@@ -1,0 +1,53 @@
+===============================================
+keysAndDwd 授权服务 - 一键部署指令
+===============================================
+
+在 Ubuntu 服务器上执行以下命令（需要 root 权限）：
+
+# 私有仓库需要先配置 GitHub 认证（使用 Personal Access Token）
+# 替换 YOUR_GITHUB_TOKEN 为你的 GitHub PAT
+
+# 方法一：使用 Token 克隆（推荐）
+sudo apt-get update && sudo apt-get install -y git docker.io docker-compose-plugin
+sudo git clone https://YOUR_GITHUB_TOKEN@github.com/green-yl/keysAndDow.git /opt/keysAndDwd
+cd /opt/keysAndDwd
+sudo chmod +x deploy.sh
+sudo ./deploy.sh
+
+# 方法二：配置 Git 凭据后克隆
+git config --global credential.helper store
+sudo git clone https://github.com/green-yl/keysAndDow.git /opt/keysAndDwd
+# 输入用户名和 Personal Access Token
+cd /opt/keysAndDwd
+sudo chmod +x deploy.sh
+sudo ./deploy.sh
+
+===============================================
+部署完成后访问：
+===============================================
+
+- 授权服务 API: http://服务器IP:3003
+- 管理页面: http://服务器IP:3003/admin.html
+- 健康检查: http://服务器IP:3003/api/health
+
+===============================================
+常用管理命令：
+===============================================
+
+# 查看服务状态
+cd /opt/keysAndDwd && sudo docker compose ps
+
+# 查看日志
+cd /opt/keysAndDwd && sudo docker compose logs -f
+
+# 重启服务
+cd /opt/keysAndDwd && sudo docker compose restart
+
+# 停止服务
+cd /opt/keysAndDwd && sudo docker compose down
+
+# 重新构建并启动
+cd /opt/keysAndDwd && sudo docker compose up -d --build
+
+===============================================
+
