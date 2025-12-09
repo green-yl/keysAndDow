@@ -104,7 +104,7 @@ public class AuthorizationService {
             
             // 2. 检查是否已存在此激活码的许可证
             // ✅ 允许多次激活，但需间隔1小时，再次激活后旧设备失效
-            Optional<License> existingLicenseByCode = licenseRepository.findByCode(code);
+            Optional<License> existingLicenseByCode = licenseRepository.findLatestByCode(code);
             if (existingLicenseByCode.isPresent()) {
                 License existingLicense = existingLicenseByCode.get();
                 

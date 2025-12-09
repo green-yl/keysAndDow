@@ -212,6 +212,26 @@ public class LicenseRepository {
         return jdbcTemplate.update(sql, id);
     }
     
+    /**
+     * 根据激活码吊销许可证
+     */
+    public int revokeByCode(String code, String reason) {
+        String sql = "UPDATE licenses SET status = 'revoked', updated_at = ? WHERE code = ? AND status = 'ok'";
+        return jdbcTemplate.update(sql, LocalDateTime.now(), code);
+    }
+    
+    /**
+     * 查找激活码对应的最新许可证
+     */
+    public Optional<License> findLatestByCode(String code) {
+        String sql = "SELECT l.*, p.name as plan_name, p.duration_hours as plan_duration_hours, " +
+                     "p.allow_grace as plan_allow_grace FROM licenses l " +
+                     "JOIN plans p ON l.plan_id = p.id WHERE l.code = ? " +
+                     "ORDER BY l.created_at DESC LIMIT 1";
+        List<License> results = jdbcTemplate.query(sql, LICENSE_ROW_MAPPER, code);
+        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+    }
+    
     public void updateServerIp(Long id, String serverIp) {
         String sql = "UPDATE licenses SET server_ip = ?, last_server_switch_at = ?, updated_at = ? WHERE id = ?";
         LocalDateTime now = LocalDateTime.now();
