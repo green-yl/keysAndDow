@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   keys-service:
     build:
@@ -27,6 +25,8 @@ services:
       - ./logs:/app/logs
       # 配置
       - ./configs:/app/configs
+      # 旧版源码缓存目录（数据库中记录的路径）
+      - /srv/source_cache:/srv/source_cache
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3003/api/health"]
