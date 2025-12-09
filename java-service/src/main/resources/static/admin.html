@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>keysAndDwd 授权管理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .sidebar { min-height: 100vh; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .sidebar .nav-link { color: rgba(255,255,255,0.8); padding: 12px 20px; margin: 4px 0; border-radius: 8px; }
+        .sidebar .nav-link:hover, .sidebar .nav-link.active { background: rgba(255,255,255,0.2); color: #fff; }
+        .sidebar .nav-link i { margin-right: 10px; }
+        .main-content { padding: 30px; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+        .card-header { background: transparent; border-bottom: 1px solid #eee; font-weight: 600; }
+        .stat-card { text-align: center; padding: 20px; }
+        .stat-card .stat-value { font-size: 2.5rem; font-weight: 700; color: #667eea; }
+        .stat-card .stat-label { color: #6c757d; font-size: 0.9rem; }
+        .section { display: none; }
+        .section:first-of-type { display: block; }
+        .table th { font-weight: 600; color: #495057; border-top: none; }
+        .badge { padding: 6px 12px; }
+        .btn-group-sm > .btn { padding: 4px 8px; font-size: 0.8rem; }
+        .logo { color: #fff; font-size: 1.5rem; font-weight: 700; padding: 20px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .thumbnail-preview { width: 60px; height: 60px; object-fit: cover; border-radius: 8px; }
+        .source-info .source-name { font-weight: 600; }
+        .source-info .source-code { font-size: 0.85rem; color: #6c757d; }
+        .status-badge { padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; }
+        .status-active, .status-ok { background: #d4edda; color: #155724; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- 侧边栏 -->
+            <div class="col-md-3 col-lg-2 sidebar p-0">
+                <div class="logo">
+                    <i class="bi bi-key-fill"></i> keysAndDwd
+                </div>
+                <nav class="nav flex-column p-3">
+                    <a class="nav-link active" href="#" onclick="showSection('dashboard')">
+                        <i class="bi bi-speedometer2"></i> 仪表板
+                    </a>
+                    <a class="nav-link" href="#" onclick="showSection('plans')">
+                        <i class="bi bi-box-seam"></i> 套餐管理
+                    </a>
+                    <a class="nav-link" href="#" onclick="showSection('codes')">
+                        <i class="bi bi-upc-scan"></i> 激活码管理
+                    </a>
+                    <a class="nav-link" href="#" onclick="showSection('licenses')">
+                        <i class="bi bi-shield-check"></i> 许可证管理
+                    </a>
+                    <a class="nav-link" href="#" onclick="showSection('sources')">
+                        <i class="bi bi-folder2-open"></i> 源码管理
+                    </a>
+                    <a class="nav-link" href="#" onclick="showSection('stats')">
+                        <i class="bi bi-graph-up"></i> 下载统计
+                    </a>
+                    <a class="nav-link" href="#" onclick="showSection('audit')">
+                        <i class="bi bi-journal-text"></i> 审计日志
+                    </a>
+                </nav>
+            </div>
+
+            <!-- 主内容区 -->
+            <div class="col-md-9 col-lg-10 main-content">
+                
+                <!-- 仪表板 -->
+                <div id="dashboard" class="section">
+                    <h4 class="mb-4">仪表板</h4>
+                    <div class="row g-4">
+                        <div class="col-md-3">
+                            <div class="card stat-card">
+                                <div class="stat-value" id="totalPlans">0</div>
+                                <div class="stat-label">套餐数量</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card stat-card">
+                                <div class="stat-value" id="totalCodes">0</div>
+                                <div class="stat-label">激活码数量</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card stat-card">
+                                <div class="stat-value" id="totalLicenses">0</div>
+                                <div class="stat-label">许可证数量</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card stat-card">
+                                <div class="stat-value" id="todayDownloads">0</div>
+                                <div class="stat-label">今日下载</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 套餐管理 -->
+                <div id="plans" class="section">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h4>套餐管理</h4>
+                        <button class="btn btn-primary" onclick="showCreatePlanModal()">
+                            <i class="bi bi-plus-lg"></i> 创建套餐
+                        </button>
+                    </div>
+                    <div class="card">
+                        <div class="card-body">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>名称</th>
+                                        <th>时长(小时)</th>
+                                        <th>初始额度</th>
+                                        <th>允许宽限</th>
+                                        <th>创建时间</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="plansTable"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 激活码管理 -->
+                <div id="codes" class="section">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h4>激活码管理</h4>
+                        <button class="btn btn-primary" onclick="showBatchCreateCodeModal()">
+                            <i class="bi bi-plus-lg"></i> 批量创建
+                        </button>
+                    </div>
+                    <div class="card">
+                        <div class="card-body">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>激活码</th>
+                                        <th>套餐</th>
+                                        <th>使用次数</th>
+                                        <th>过期时间</th>
+                                        <th>状态</th>
+                                        <th>备注</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="codesTable"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 许可证管理 -->
+                <div id="licenses" class="section">
+                    <h4 class="mb-4">许可证管理</h4>
+                    <div class="card">
+                        <div class="card-body">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>激活码</th>
+                                        <th>用户标识</th>
+                                        <th>硬件ID</th>
+                                        <th>套餐</th>
+                                        <th>有效期</th>
+                                        <th>下载额度</th>
+                                        <th>状态</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="licensesTable"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 源码管理 -->
+                <div id="sources" class="section">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h4>源码管理</h4>
+                        <button class="btn btn-primary" onclick="showAddSourceModal()">
+                            <i class="bi bi-upload"></i> 上传源码
+                        </button>
+                    </div>
+                    <div class="card">
+                        <div class="card-body">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>缩略图</th>
+                                        <th>名称</th>
+                                        <th>国家/网站</th>
+                                        <th>大小</th>
+                                        <th>状态</th>
+                                        <th>更新时间</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sourcesTable"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 下载统计 -->
+                <div id="stats" class="section">
+                    <h4 class="mb-4">下载统计</h4>
+                    <div class="card mb-4">
+                        <div class="card-header">今日下载</div>
+                        <div class="card-body">
+                            <h2 id="statsToday" class="text-primary">0</h2>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">最近下载记录</div>
+                        <div class="card-body">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>许可证ID</th>
+                                        <th>文件ID</th>
+                                        <th>状态</th>
+                                        <th>扣除额度</th>
+                                        <th>时间</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="recentDownloads"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 审计日志 -->
+                <div id="audit" class="section">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h4>审计日志</h4>
+                        <div>
+                            <button class="btn btn-outline-warning btn-sm me-2" onclick="cleanupOldAuditLogs()">
+                                <i class="bi bi-clock-history"></i> 清理旧日志
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" onclick="clearAllAuditLogs()">
+                                <i class="bi bi-trash"></i> 清空全部
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-body">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>操作人</th>
+                                        <th>动作</th>
+                                        <th>目标</th>
+                                        <th>详情</th>
+                                        <th>时间</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="auditTable"></tbody>
+                            </table>
+                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                <span id="auditPaginationInfo" class="text-muted"></span>
+                                <div id="auditPaginationControls"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- 创建套餐模态框 -->
+    <div class="modal fade" id="createPlanModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">创建套餐</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="createPlanForm">
+                        <div class="mb-3">
+                            <label class="form-label">套餐名称</label>
+                            <input type="text" class="form-control" name="name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">有效时长(小时)</label>
+                            <input type="number" class="form-control" name="duration_hours" value="720" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">初始下载额度</label>
+                            <input type="number" class="form-control" name="init_quota" value="10" required>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" name="allow_grace" id="allowGrace">
+                            <label class="form-check-label" for="allowGrace">允许宽限期</label>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">功能描述</label>
+                            <textarea class="form-control" name="features" rows="2"></textarea>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="createPlan()">创建</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量创建激活码模态框 -->
+    <div class="modal fade" id="batchCreateCodeModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">批量创建激活码</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="batchCreateCodeForm">
+                        <div class="mb-3">
+                            <label class="form-label">卡类型</label>
+                            <select class="form-select" name="card_type" onchange="updateCardSettings()" required>
+                                <option value="">请选择</option>
+                                <option value="week">周卡 (7天)</option>
+                                <option value="month">月卡 (30天)</option>
+                                <option value="custom">自定义套餐</option>
+                            </select>
+                        </div>
+                        <div id="customSettings" style="display: none;">
+                            <div class="mb-3">
+                                <label class="form-label">选择套餐</label>
+                                <select class="form-select" name="plan_id">
+                                    <option value="">请选择套餐</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">可激活次数</label>
+                            <input type="number" class="form-control" name="issue_limit" value="1" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">激活码过期时间</label>
+                            <input type="datetime-local" class="form-control" name="exp_at" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">备注</label>
+                            <input type="text" class="form-control" name="note">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">创建数量</label>
+                            <input type="number" class="form-control" name="count" value="1" min="1" max="100" required>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="batchCreateCodes()">创建</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 上传源码模态框 -->
+    <div class="modal fade" id="addSourceModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">上传源码</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="addSourceForm" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label class="form-label">源码名称</label>
+                            <input type="text" class="form-control" name="name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">代码标识</label>
+                            <input type="text" class="form-control" name="codeName" required placeholder="如: JP-AMAZON">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">版本号</label>
+                            <input type="text" class="form-control" name="version" value="1.0.0" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">国家</label>
+                            <input type="text" class="form-control" name="country" placeholder="如: JP">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">网站</label>
+                            <input type="text" class="form-control" name="website" placeholder="如: amazon.co.jp">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">描述</label>
+                            <textarea class="form-control" name="description" rows="2"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">源码文件 (ZIP)</label>
+                            <input type="file" class="form-control" name="file" accept=".zip" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">缩略图 (可选)</label>
+                            <input type="file" class="form-control" name="thumbnail" accept="image/*">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="addSource()">上传</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="admin.js"></script>
+</body>
+</html>
+
