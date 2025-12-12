@@ -60,6 +60,10 @@ public class SourcePackageRepository {
         return jdbc.update("UPDATE source_packages SET name=?, code_name=?, description=?, country=?, website=?, update_time=datetime('now') WHERE id=?",
                 name, codeName, description, country, website, id);
     }
+    
+    public int updateVersion(String id, String version) {
+        return jdbc.update("UPDATE source_packages SET version=?, update_time=datetime('now') WHERE id=?", version, id);
+    }
 
     public int updateThumbnail(String id, String thumbnailPath, String thumbnailUrl) {
         return jdbc.update("UPDATE source_packages SET thumbnail_path=?, thumbnail_url=?, update_time=datetime('now') WHERE id=?",
