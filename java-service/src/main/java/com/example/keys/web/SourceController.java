@@ -197,16 +197,25 @@ public class SourceController {
                                       @RequestParam(value = "preview", required = false) MultipartFile preview) throws Exception {
         try {
         var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
-        // 去重：如已存在相同sha256的包，直接返回已有记录信息
+        // 去重：如已存在相同sha256的包（包括已删除的），检查并返回相应信息
         var existing = repo.findBySha256(info.sha256());
         if (existing != null) {
             Map<String,Object> resp = new HashMap<>();
-            resp.put("success", true);
-            resp.put("dedup", true);
-            resp.put("id", existing.getId());
-            resp.put("sha256", existing.getSha256());
-            if (existing.getArtifactUrl() != null) resp.put("artifactUrl", existing.getArtifactUrl());
-            if (existing.getThumbnailUrl() != null) resp.put("thumbnailUrl", existing.getThumbnailUrl());
+            // 检查是否是活跃记录 (isActive = 1 表示活跃)
+            if (existing.getIsActive() != null && existing.getIsActive() == 1) {
+                resp.put("success", true);
+                resp.put("dedup", true);
+                resp.put("message", "该文件已存在，直接复用");
+                resp.put("id", existing.getId());
+                resp.put("sha256", existing.getSha256());
+                if (existing.getArtifactUrl() != null) resp.put("artifactUrl", existing.getArtifactUrl());
+                if (existing.getThumbnailUrl() != null) resp.put("thumbnailUrl", existing.getThumbnailUrl());
+            } else {
+                // 已删除的记录，提示用户
+                resp.put("success", false);
+                resp.put("error", "该文件曾经上传过但已被删除。如需重新使用，请上传不同的文件或联系管理员恢复。");
+                resp.put("deletedId", existing.getId());
+            }
             return resp;
         }
         var bucketDir = storage.bucketize(info.sha256());
@@ -436,7 +445,12 @@ public class SourceController {
             // 检查SHA256是否重复
             var existingBySha = repo.findBySha256(info.sha256());
             if (existingBySha != null) {
-                return Map.of("success", false, "error", "该文件已存在（SHA256重复）", "existingId", existingBySha.getId());
+                if (existingBySha.getIsActive() != null && existingBySha.getIsActive() == 1) {
+                    return Map.of("success", false, "error", "该文件已存在", "existingId", existingBySha.getId(), 
+                                 "existingVersion", existingBySha.getVersion());
+                } else {
+                    return Map.of("success", false, "error", "该文件曾经上传过但已被删除，请上传不同的文件");
+                }
             }
             
             var bucketDir = storage.bucketize(info.sha256());
@@ -539,7 +553,12 @@ public class SourceController {
             // 检查SHA256是否重复
             var existing = repo.findBySha256(info.sha256());
             if (existing != null) {
-                return Map.of("success", false, "error", "该文件已存在（SHA256重复）", "existingId", existing.getId());
+                if (existing.getIsActive() != null && existing.getIsActive() == 1) {
+                    return Map.of("success", false, "error", "该文件已存在", "existingId", existing.getId(),
+                                 "existingVersion", existing.getVersion());
+                } else {
+                    return Map.of("success", false, "error", "该文件曾经上传过但已被删除，请上传不同的文件");
+                }
             }
             
             var bucketDir = storage.bucketize(info.sha256());

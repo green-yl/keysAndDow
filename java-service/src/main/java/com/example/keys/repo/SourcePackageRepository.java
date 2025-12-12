@@ -99,7 +99,20 @@ public class SourcePackageRepository {
         return list.isEmpty() ? null : list.get(0);
     }
 
+    /**
+     * 根据SHA256查找源码包（用于去重检查）
+     * 注意：查询所有记录（包括已删除的），因为 UNIQUE 约束是针对所有记录的
+     */
     public SourcePackage findBySha256(String sha256) {
+        List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE sha256=? LIMIT 1",
+                new BeanPropertyRowMapper<>(SourcePackage.class), sha256);
+        return list.isEmpty() ? null : list.get(0);
+    }
+    
+    /**
+     * 根据SHA256查找活跃的源码包
+     */
+    public SourcePackage findActiveBySha256(String sha256) {
         List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE sha256=? AND is_active=1 LIMIT 1",
                 new BeanPropertyRowMapper<>(SourcePackage.class), sha256);
         return list.isEmpty() ? null : list.get(0);
