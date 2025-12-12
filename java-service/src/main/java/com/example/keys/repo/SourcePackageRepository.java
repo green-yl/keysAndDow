@@ -40,6 +40,13 @@ public class SourcePackageRepository {
     public int markDeleted(String id) {
         return jdbc.update("UPDATE source_packages SET is_active=0, update_time=datetime('now') WHERE id=?", id);
     }
+    
+    /**
+     * 物理删除源码包记录
+     */
+    public int hardDelete(String id) {
+        return jdbc.update("DELETE FROM source_packages WHERE id=?", id);
+    }
 
     public int updateStatus(String id, String status) {
         return jdbc.update("UPDATE source_packages SET status=?, update_time=datetime('now') WHERE id=?", status, id);
@@ -101,18 +108,9 @@ public class SourcePackageRepository {
 
     /**
      * 根据SHA256查找源码包（用于去重检查）
-     * 注意：查询所有记录（包括已删除的），因为 UNIQUE 约束是针对所有记录的
+     * 注意：现在使用物理删除，只需要检查活跃记录
      */
     public SourcePackage findBySha256(String sha256) {
-        List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE sha256=? LIMIT 1",
-                new BeanPropertyRowMapper<>(SourcePackage.class), sha256);
-        return list.isEmpty() ? null : list.get(0);
-    }
-    
-    /**
-     * 根据SHA256查找活跃的源码包
-     */
-    public SourcePackage findActiveBySha256(String sha256) {
         List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE sha256=? AND is_active=1 LIMIT 1",
                 new BeanPropertyRowMapper<>(SourcePackage.class), sha256);
         return list.isEmpty() ? null : list.get(0);

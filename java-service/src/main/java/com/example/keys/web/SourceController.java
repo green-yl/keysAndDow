@@ -197,25 +197,17 @@ public class SourceController {
                                       @RequestParam(value = "preview", required = false) MultipartFile preview) throws Exception {
         try {
         var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
-        // 去重：如已存在相同sha256的包（包括已删除的），检查并返回相应信息
+        // 去重：如已存在相同sha256的包，直接返回已有记录信息
         var existing = repo.findBySha256(info.sha256());
         if (existing != null) {
             Map<String,Object> resp = new HashMap<>();
-            // 检查是否是活跃记录 (isActive = 1 表示活跃)
-            if (existing.getIsActive() != null && existing.getIsActive() == 1) {
-                resp.put("success", true);
-                resp.put("dedup", true);
-                resp.put("message", "该文件已存在，直接复用");
-                resp.put("id", existing.getId());
-                resp.put("sha256", existing.getSha256());
-                if (existing.getArtifactUrl() != null) resp.put("artifactUrl", existing.getArtifactUrl());
-                if (existing.getThumbnailUrl() != null) resp.put("thumbnailUrl", existing.getThumbnailUrl());
-            } else {
-                // 已删除的记录，提示用户
-                resp.put("success", false);
-                resp.put("error", "该文件曾经上传过但已被删除。如需重新使用，请上传不同的文件或联系管理员恢复。");
-                resp.put("deletedId", existing.getId());
-            }
+            resp.put("success", true);
+            resp.put("dedup", true);
+            resp.put("message", "该文件已存在，直接复用");
+            resp.put("id", existing.getId());
+            resp.put("sha256", existing.getSha256());
+            if (existing.getArtifactUrl() != null) resp.put("artifactUrl", existing.getArtifactUrl());
+            if (existing.getThumbnailUrl() != null) resp.put("thumbnailUrl", existing.getThumbnailUrl());
             return resp;
         }
         var bucketDir = storage.bucketize(info.sha256());
@@ -319,8 +311,98 @@ public class SourceController {
 
     @DeleteMapping("/sources/{id}")
     public Map<String, Object> delete(@PathVariable String id) {
-        repo.markDeleted(id);
-        return Map.of("success", true);
+        try {
+            // 获取源码包信息
+            var sp = repo.findById(id);
+            if (sp == null) {
+                return Map.of("success", false, "error", "源码包不存在");
+            }
+            
+            // 删除本地文件
+            int filesDeleted = 0;
+            
+            // 删除源码包文件
+            if (sp.getPackagePath() != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(sp.getPackagePath()));
+                    filesDeleted++;
+                } catch (Exception e) {
+                    // 忽略文件删除错误
+                }
+            }
+            
+            // 删除缩略图
+            if (sp.getThumbnailPath() != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(sp.getThumbnailPath()));
+                    filesDeleted++;
+                } catch (Exception e) {
+                    // 忽略文件删除错误
+                }
+            }
+            
+            // 删除 logo
+            if (sp.getLogoPath() != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(sp.getLogoPath()));
+                    filesDeleted++;
+                } catch (Exception e) {
+                    // 忽略文件删除错误
+                }
+            }
+            
+            // 删除 preview
+            if (sp.getPreviewPath() != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(sp.getPreviewPath()));
+                    filesDeleted++;
+                } catch (Exception e) {
+                    // 忽略文件删除错误
+                }
+            }
+            
+            // 删除解压目录
+            if (sp.getExtractedPath() != null) {
+                try {
+                    java.nio.file.Path extractedDir = java.nio.file.Path.of(sp.getExtractedPath());
+                    if (java.nio.file.Files.exists(extractedDir)) {
+                        java.nio.file.Files.walk(extractedDir)
+                            .sorted(java.util.Comparator.reverseOrder())
+                            .forEach(path -> {
+                                try { java.nio.file.Files.delete(path); } catch (Exception e) {}
+                            });
+                        filesDeleted++;
+                    }
+                } catch (Exception e) {
+                    // 忽略目录删除错误
+                }
+            }
+            
+            // 删除 bucket 目录（如果存在且为空）
+            if (sp.getBucketRelPath() != null) {
+                try {
+                    java.nio.file.Path bucketDir = java.nio.file.Path.of(sp.getBucketRelPath());
+                    if (java.nio.file.Files.exists(bucketDir) && java.nio.file.Files.isDirectory(bucketDir)) {
+                        // 检查目录是否为空
+                        try (var stream = java.nio.file.Files.list(bucketDir)) {
+                            if (stream.findFirst().isEmpty()) {
+                                java.nio.file.Files.delete(bucketDir);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    // 忽略目录删除错误
+                }
+            }
+            
+            // 物理删除数据库记录
+            repo.hardDelete(id);
+            
+            return Map.of("success", true, "message", "源码包已彻底删除", "filesDeleted", filesDeleted);
+            
+        } catch (Exception e) {
+            return Map.of("success", false, "error", "删除失败: " + e.getMessage());
+        }
     }
 
     @PostMapping(value = "/sources/{id}/meta", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
@@ -445,12 +527,8 @@ public class SourceController {
             // 检查SHA256是否重复
             var existingBySha = repo.findBySha256(info.sha256());
             if (existingBySha != null) {
-                if (existingBySha.getIsActive() != null && existingBySha.getIsActive() == 1) {
-                    return Map.of("success", false, "error", "该文件已存在", "existingId", existingBySha.getId(), 
-                                 "existingVersion", existingBySha.getVersion());
-                } else {
-                    return Map.of("success", false, "error", "该文件曾经上传过但已被删除，请上传不同的文件");
-                }
+                return Map.of("success", false, "error", "该文件已存在", "existingId", existingBySha.getId(), 
+                             "existingVersion", existingBySha.getVersion());
             }
             
             var bucketDir = storage.bucketize(info.sha256());
@@ -553,12 +631,8 @@ public class SourceController {
             // 检查SHA256是否重复
             var existing = repo.findBySha256(info.sha256());
             if (existing != null) {
-                if (existing.getIsActive() != null && existing.getIsActive() == 1) {
-                    return Map.of("success", false, "error", "该文件已存在", "existingId", existing.getId(),
-                                 "existingVersion", existing.getVersion());
-                } else {
-                    return Map.of("success", false, "error", "该文件曾经上传过但已被删除，请上传不同的文件");
-                }
+                return Map.of("success", false, "error", "该文件已存在", "existingId", existing.getId(),
+                             "existingVersion", existing.getVersion());
             }
             
             var bucketDir = storage.bucketize(info.sha256());
