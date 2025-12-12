@@ -3,10 +3,10 @@ package com.example.keys.config;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -18,13 +18,20 @@ import java.util.concurrent.atomic.AtomicInteger;
  * API 请求限流配置
  * 防止单个 IP 发送过多请求导致服务器过载
  */
-@Slf4j
 @Configuration
 public class RateLimitConfig {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RateLimitConfig.class);
     
     // 限流配置
-    private static final int MAX_REQUESTS_PER_MINUTE = 120; // 每分钟最大请求数
-    private static final int MAX_REQUESTS_PER_SECOND = 10;  // 每秒最大请求数
+    @Value("${app.ratelimit.enabled:true}")
+    private boolean enabled;
+
+    @Value("${app.ratelimit.max-per-minute:300}")
+    private int maxPerMinute; // 每分钟最大请求数（默认放宽，配合 demo02 缓存更稳）
+
+    @Value("${app.ratelimit.max-per-second:20}")
+    private int maxPerSecond;  // 每秒最大请求数
     
     // IP 请求计数器
     private final Map<String, RateLimitEntry> ipRateLimits = new ConcurrentHashMap<>();
@@ -49,6 +56,11 @@ public class RateLimitConfig {
             
             HttpServletRequest httpRequest = (HttpServletRequest) request;
             HttpServletResponse httpResponse = (HttpServletResponse) response;
+
+            if (!enabled) {
+                chain.doFilter(request, response);
+                return;
+            }
             
             String clientIp = getClientIp(httpRequest);
             String path = httpRequest.getRequestURI();
@@ -59,7 +71,7 @@ public class RateLimitConfig {
             }
             
             // 检查限流
-            RateLimitEntry entry = ipRateLimits.computeIfAbsent(clientIp, k -> new RateLimitEntry());
+            RateLimitEntry entry = ipRateLimits.computeIfAbsent(clientIp, k -> new RateLimitEntry(maxPerSecond, maxPerMinute));
             
             if (!entry.allowRequest()) {
                 log.warn("IP {} 被限流，请求路径: {}", clientIp, path);
@@ -106,12 +118,16 @@ public class RateLimitConfig {
         private volatile long currentSecond;
         private volatile long currentMinute;
         private volatile long lastAccess;
+        private final int maxPerSecond;
+        private final int maxPerMinute;
         
-        public RateLimitEntry() {
+        public RateLimitEntry(int maxPerSecond, int maxPerMinute) {
             long now = System.currentTimeMillis();
             this.currentSecond = now / 1000;
             this.currentMinute = now / 60000;
             this.lastAccess = now;
+            this.maxPerSecond = Math.max(1, maxPerSecond);
+            this.maxPerMinute = Math.max(1, maxPerMinute);
         }
         
         public synchronized boolean allowRequest() {
@@ -133,10 +149,10 @@ public class RateLimitConfig {
             }
             
             // 检查限制
-            if (secondCount.get() >= MAX_REQUESTS_PER_SECOND) {
+            if (secondCount.get() >= maxPerSecond) {
                 return false;
             }
-            if (minuteCount.get() >= MAX_REQUESTS_PER_MINUTE) {
+            if (minuteCount.get() >= maxPerMinute) {
                 return false;
             }
             
