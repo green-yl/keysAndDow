@@ -169,6 +169,22 @@ public class SourceController {
         return org.springframework.http.ResponseEntity.notFound().build();
     }
 
+    @GetMapping("/sources/by-sha/{sha256}/logo")
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> logoBySha(@PathVariable String sha256) throws Exception {
+        java.nio.file.Path bucket = storage.bucketize(sha256);
+        String[] names = new String[]{"logo.png", "logo.jpg", "logo.jpeg", "logo.webp"};
+        for (String n : names) {
+            java.nio.file.Path p = bucket.resolve(n);
+            if (java.nio.file.Files.exists(p)) {
+                var res = new org.springframework.core.io.PathResource(p);
+                org.springframework.http.MediaType mt = n.endsWith("png") ? org.springframework.http.MediaType.IMAGE_PNG :
+                        (n.endsWith("webp") ? org.springframework.http.MediaType.valueOf("image/webp") : org.springframework.http.MediaType.IMAGE_JPEG);
+                return org.springframework.http.ResponseEntity.ok().contentType(mt).body(res);
+            }
+        }
+        return org.springframework.http.ResponseEntity.notFound().build();
+    }
+
     @GetMapping("/sources")
     public Map<String, Object> list(@RequestParam(value = "q", required = false) String q) {
         List<SourcePackage> data = repo.findAll(q);
@@ -466,6 +482,7 @@ public class SourceController {
                                                    @RequestParam(required = false) String version,
                                                    @RequestParam(value = "package", required = false) MultipartFile file,
                                                    @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail,
+                                                   @RequestParam(value = "logo", required = false) MultipartFile logo,
                                                    @RequestParam(value = "name", required = false) String name,
                                                    @RequestParam(value = "description", required = false) String description,
                                                    @RequestParam(value = "country", required = false) String country,
@@ -507,6 +524,22 @@ public class SourceController {
                     }
                     repo.updateThumbnail(id, t.toString(), thumbUrl);
                     result.put("thumbnailUpdated", true);
+                }
+                
+                // 更新 Logo
+                if (logo != null && !logo.isEmpty()) {
+                    var bucketDir = storage.bucketize(sp.getSha256());
+                    var p = storage.saveImage(logo.getInputStream(), logo.getOriginalFilename(), bucketDir, "logo");
+                    String logoUrl = null;
+                    if (s3.isEnabled()) {
+                        try (var in = java.nio.file.Files.newInputStream(p)) {
+                            String fname = p.getFileName().toString();
+                            String ct = fname.endsWith("png") ? "image/png" : (fname.endsWith("webp") ? "image/webp" : "image/jpeg");
+                            logoUrl = s3.putObject(sp.getSha256() + "/" + fname, in, java.nio.file.Files.size(p), ct);
+                        }
+                    }
+                    repo.updateLogo(id, p.toString(), logoUrl);
+                    result.put("logoUpdated", true);
                 }
                 
                 result.put("id", id);
@@ -567,9 +600,25 @@ public class SourceController {
                 newSp.setThumbnailUrl(sp.getThumbnailUrl());
             }
             
-            // 继承原有的 logo 和 preview
-            newSp.setLogoPath(sp.getLogoPath());
-            newSp.setLogoUrl(sp.getLogoUrl());
+            // 处理 Logo - 优先使用新上传的，否则继承原有的
+            if (logo != null && !logo.isEmpty()) {
+                var p = storage.saveImage(logo.getInputStream(), logo.getOriginalFilename(), bucketDir, "logo");
+                newSp.setLogoPath(p.toString());
+                if (s3.isEnabled()) {
+                    try (var in = java.nio.file.Files.newInputStream(p)) {
+                        String fname = p.getFileName().toString();
+                        String ct = fname.endsWith("png") ? "image/png" : (fname.endsWith("webp") ? "image/webp" : "image/jpeg");
+                        String logoUrl = s3.putObject(info.sha256() + "/" + fname, in, java.nio.file.Files.size(p), ct);
+                        newSp.setLogoUrl(logoUrl);
+                    }
+                }
+            } else {
+                // 继承原有 logo
+                newSp.setLogoPath(sp.getLogoPath());
+                newSp.setLogoUrl(sp.getLogoUrl());
+            }
+            
+            // 继承原有的 preview
             newSp.setPreviewPath(sp.getPreviewPath());
             newSp.setPreviewUrl(sp.getPreviewUrl());
             
