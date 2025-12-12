@@ -366,8 +366,9 @@ public class SourceController {
     }
 
     /**
-     * 源码更新 - 上传新版本源码包（保留原有信息，只更新版本和文件）
+     * 源码更新 - 上传新版本源码包（创建新记录，保留原有信息）
      * 这个接口用于快速更新源码，省去重复填写信息的烦恼
+     * 注意：上传新的源码包会创建新记录，而不是替换旧记录，这样才能正确检测版本更新
      */
     @PostMapping(value = "/sources/{id}/update", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> updateSourcePackage(@PathVariable String id,
@@ -386,68 +387,122 @@ public class SourceController {
             
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
-            result.put("id", id);
+            result.put("oldId", id);
             
-            // 更新元信息（如果提供）
-            boolean metaUpdated = false;
-            String finalName = name != null ? name : sp.getName();
-            String finalDesc = description != null ? description : sp.getDescription();
-            String finalCountry = country != null ? country : sp.getCountry();
-            String finalWebsite = website != null ? website : sp.getWebsite();
-            
-            if (name != null || description != null || country != null || website != null) {
-                repo.updateMeta(id, finalName, sp.getCodeName(), finalDesc, finalCountry, finalWebsite);
-                metaUpdated = true;
-                result.put("metaUpdated", true);
+            // 如果只是更新元信息（没有上传新文件），直接更新现有记录
+            if (file == null || file.isEmpty()) {
+                // 更新元信息
+                String finalName = name != null && !name.trim().isEmpty() ? name : sp.getName();
+                String finalDesc = description != null ? description : sp.getDescription();
+                String finalCountry = country != null ? country : sp.getCountry();
+                String finalWebsite = website != null ? website : sp.getWebsite();
+                
+                if (name != null || description != null || country != null || website != null) {
+                    repo.updateMeta(id, finalName, sp.getCodeName(), finalDesc, finalCountry, finalWebsite);
+                    result.put("metaUpdated", true);
+                }
+                
+                // 更新缩略图
+                if (thumbnail != null && !thumbnail.isEmpty()) {
+                    var bucketDir = storage.bucketize(sp.getSha256());
+                    var t = storage.saveThumbnail(thumbnail.getInputStream(), thumbnail.getOriginalFilename(), bucketDir);
+                    String thumbUrl = null;
+                    if (s3.isEnabled()) {
+                        try (var in = java.nio.file.Files.newInputStream(t)) {
+                            String fname = t.getFileName().toString();
+                            String ct = fname.endsWith("png") ? "image/png" : (fname.endsWith("webp") ? "image/webp" : "image/jpeg");
+                            thumbUrl = s3.putObject(sp.getSha256() + "/" + fname, in, java.nio.file.Files.size(t), ct);
+                        }
+                    }
+                    repo.updateThumbnail(id, t.toString(), thumbUrl);
+                    result.put("thumbnailUpdated", true);
+                }
+                
+                result.put("id", id);
+                return result;
             }
             
-            // 更新缩略图（如果提供）
+            // 上传了新文件 - 创建新的版本记录
+            String newVersion = (version != null && !version.trim().isEmpty()) ? version.trim() : incrementVersion(sp.getVersion());
+            
+            // 检查版本是否已存在
+            if (repo.existsByCodeNameAndVersion(sp.getCodeName(), newVersion, null)) {
+                return Map.of("success", false, "error", "版本 " + newVersion + " 已存在，请指定新版本号");
+            }
+            
+            // 保存新文件
+            var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
+            
+            // 检查SHA256是否重复
+            var existingBySha = repo.findBySha256(info.sha256());
+            if (existingBySha != null) {
+                return Map.of("success", false, "error", "该文件已存在（SHA256重复）", "existingId", existingBySha.getId());
+            }
+            
+            var bucketDir = storage.bucketize(info.sha256());
+            
+            // 创建新的源码包记录，继承原有信息
+            SourcePackage newSp = new SourcePackage();
+            newSp.setId(UUID.randomUUID().toString());
+            newSp.setName(name != null && !name.trim().isEmpty() ? name : sp.getName());
+            newSp.setCodeName(sp.getCodeName());
+            newSp.setVersion(newVersion);
+            newSp.setDescription(description != null ? description : sp.getDescription());
+            newSp.setCountry(country != null ? country : sp.getCountry());
+            newSp.setWebsite(website != null ? website : sp.getWebsite());
+            newSp.setSha256(info.sha256());
+            newSp.setBucketRelPath(bucketDir.toString());
+            newSp.setPackageExt(info.ext());
+            newSp.setPackagePath(info.finalPath().toString());
+            newSp.setFileSize(info.size());
+            newSp.setStatus("uploaded");
+            
+            // 处理缩略图 - 优先使用新上传的，否则继承原有的
             if (thumbnail != null && !thumbnail.isEmpty()) {
-                var bucketDir = storage.bucketize(sp.getSha256());
                 var t = storage.saveThumbnail(thumbnail.getInputStream(), thumbnail.getOriginalFilename(), bucketDir);
-                String thumbUrl = null;
+                newSp.setThumbnailPath(t.toString());
                 if (s3.isEnabled()) {
                     try (var in = java.nio.file.Files.newInputStream(t)) {
                         String fname = t.getFileName().toString();
                         String ct = fname.endsWith("png") ? "image/png" : (fname.endsWith("webp") ? "image/webp" : "image/jpeg");
-                        thumbUrl = s3.putObject(sp.getSha256() + "/" + fname, in, java.nio.file.Files.size(t), ct);
+                        String thumbUrl = s3.putObject(info.sha256() + "/" + fname, in, java.nio.file.Files.size(t), ct);
+                        newSp.setThumbnailUrl(thumbUrl);
                     }
                 }
-                repo.updateThumbnail(id, t.toString(), thumbUrl);
-                result.put("thumbnailUpdated", true);
-                result.put("thumbnailPath", t.toString());
+            } else {
+                // 继承原有缩略图
+                newSp.setThumbnailPath(sp.getThumbnailPath());
+                newSp.setThumbnailUrl(sp.getThumbnailUrl());
             }
             
-            // 更新源码包（如果提供）
-            if (file != null && !file.isEmpty()) {
-                String newVersion = version != null ? version : incrementVersion(sp.getVersion());
-                
-                // 检查版本是否已存在
-                if (repo.existsByCodeNameAndVersion(sp.getCodeName(), newVersion, id)) {
-                    return Map.of("success", false, "error", "版本 " + newVersion + " 已存在，请指定新版本号");
+            // 继承原有的 logo 和 preview
+            newSp.setLogoPath(sp.getLogoPath());
+            newSp.setLogoUrl(sp.getLogoUrl());
+            newSp.setPreviewPath(sp.getPreviewPath());
+            newSp.setPreviewUrl(sp.getPreviewUrl());
+            
+            // 上传到S3
+            String artifactUrl = null;
+            if (s3.isEnabled()) {
+                try (var in = java.nio.file.Files.newInputStream(info.finalPath())) {
+                    String key = newSp.getSha256() + "/artifact" + newSp.getPackageExt();
+                    artifactUrl = s3.putObject(key, in, newSp.getFileSize(), "application/octet-stream");
+                    newSp.setArtifactUrl(artifactUrl);
                 }
-                
-                var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
-                var bucketDir = storage.bucketize(info.sha256());
-                
-                String artifactUrl = null;
-                if (s3.isEnabled()) {
-                    try (var in = java.nio.file.Files.newInputStream(info.finalPath())) {
-                        String key = info.sha256() + "/artifact" + info.ext();
-                        artifactUrl = s3.putObject(key, in, info.size(), "application/octet-stream");
-                    }
-                }
-                
-                repo.replacePackage(id, newVersion, info.sha256(), bucketDir.toString(), 
-                                   info.ext(), info.finalPath().toString(), artifactUrl, info.size());
-                
-                result.put("packageUpdated", true);
-                result.put("version", newVersion);
-                result.put("sha256", info.sha256());
-                result.put("fileSize", info.size());
-                if (artifactUrl != null) {
-                    result.put("artifactUrl", artifactUrl);
-                }
+            }
+            
+            // 插入新记录
+            repo.insert(newSp);
+            
+            result.put("id", newSp.getId());
+            result.put("packageUpdated", true);
+            result.put("version", newVersion);
+            result.put("oldVersion", sp.getVersion());
+            result.put("sha256", newSp.getSha256());
+            result.put("fileSize", newSp.getFileSize());
+            result.put("codeName", sp.getCodeName());
+            if (artifactUrl != null) {
+                result.put("artifactUrl", artifactUrl);
             }
             
             return result;
