@@ -305,9 +305,29 @@ public class AuthorizationService {
     
     /**
      * 下载预授权
+     * @param isUpdate 是否为更新请求（更新请求不扣除配额）
+     * @param fromVersion 更新前的版本号
      */
     public Map<String, Object> downloadPreauth(String payloadBase64, String signature, String hwid, 
                                                String fileId, Map<String, Object> clientInfo, String ip) {
+        return downloadPreauthInternal(payloadBase64, signature, hwid, fileId, clientInfo, ip, false, null);
+    }
+    
+    /**
+     * 下载预授权（支持更新模式）
+     */
+    public Map<String, Object> downloadPreauthForUpdate(String payloadBase64, String signature, String hwid, 
+                                                        String fileId, Map<String, Object> clientInfo, String ip,
+                                                        String fromVersion) {
+        return downloadPreauthInternal(payloadBase64, signature, hwid, fileId, clientInfo, ip, true, fromVersion);
+    }
+    
+    /**
+     * 下载预授权内部实现
+     */
+    private Map<String, Object> downloadPreauthInternal(String payloadBase64, String signature, String hwid, 
+                                                        String fileId, Map<String, Object> clientInfo, String ip,
+                                                        boolean isUpdate, String fromVersion) {
         Map<String, Object> result = new HashMap<>();
         
         try {
@@ -381,7 +401,7 @@ public class AuthorizationService {
             String token = UUID.randomUUID().toString().replace("-", "");
             LocalDateTime expireAt = LocalDateTime.now().plusMinutes(10); // 10分钟有效期
             
-            DownloadToken downloadToken = new DownloadToken(token, license.getId(), fileId, expireAt);
+            DownloadToken downloadToken = new DownloadToken(token, license.getId(), fileId, expireAt, isUpdate, fromVersion);
             downloadTokenRepository.insert(downloadToken);
             
             // 5. 生成下载URL（这里简化处理，实际应该根据fileId生成具体的下载URL）
@@ -491,20 +511,36 @@ public class AuthorizationService {
                 // 下载成功，尝试扣次
                 int updateCount = downloadTokenRepository.markAsUsed(downloadToken);
                 if (updateCount > 0) {
-                    // 首次使用，扣除额度
-                    boolean allowGrace = license.getPlanAllowGrace() != null && license.getPlanAllowGrace();
+                    // 检查是否为更新请求（更新请求不扣除配额）
+                    boolean isUpdateRequest = token.getIsUpdate() != null && token.getIsUpdate();
                     
-                    if (allowGrace) {
-                        licenseRepository.decrementQuotaWithGrace(license.getId());
+                    if (isUpdateRequest) {
+                        // 更新请求不扣除配额
+                        deducted = false;
+                        delta = 0;
+                        
+                        // 记录审计日志
+                        auditLogRepository.insert(new AuditLog(
+                            "system", "update_download",
+                            "license:" + license.getId(),
+                            "更新下载（不扣配额）: " + token.getFileId() + " 从版本: " + token.getFromVersion()
+                        ));
                     } else {
-                        licenseRepository.decrementQuota(license.getId());
+                        // 首次下载，扣除额度
+                        boolean allowGrace = license.getPlanAllowGrace() != null && license.getPlanAllowGrace();
+                        
+                        if (allowGrace) {
+                            licenseRepository.decrementQuotaWithGrace(license.getId());
+                        } else {
+                            licenseRepository.decrementQuota(license.getId());
+                        }
+                        
+                        deducted = true;
+                        delta = 1;
+                        
+                        // 更新license对象的剩余额度
+                        license.setDownloadQuotaRemaining(license.getDownloadQuotaRemaining() - 1);
                     }
-                    
-                    deducted = true;
-                    delta = 1;
-                    
-                    // 更新license对象的剩余额度
-                    license.setDownloadQuotaRemaining(license.getDownloadQuotaRemaining() - 1);
                 }
             }
             

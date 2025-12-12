@@ -39,6 +39,10 @@ public class DownloadController {
         @SuppressWarnings("unchecked")
         Map<String, Object> clientInfo = (Map<String, Object>) request.get("client");
         
+        // 新增：是否为更新请求
+        Boolean isUpdate = (Boolean) request.get("is_update");
+        String fromVersion = (String) request.get("from_version");
+        
         if (license == null || hwid == null || fileId == null) {
             return ResponseEntity.badRequest().body(Map.of(
                 "ok", false,
@@ -57,7 +61,15 @@ public class DownloadController {
         }
         
         String ip = getClientIpAddress(httpRequest);
-        Map<String, Object> result = authorizationService.downloadPreauth(payload, sig, hwid, fileId, clientInfo, ip);
+        
+        Map<String, Object> result;
+        if (Boolean.TRUE.equals(isUpdate) && fromVersion != null) {
+            // 更新请求：使用不扣配额的方法
+            result = authorizationService.downloadPreauthForUpdate(payload, sig, hwid, fileId, clientInfo, ip, fromVersion);
+        } else {
+            // 普通下载
+            result = authorizationService.downloadPreauth(payload, sig, hwid, fileId, clientInfo, ip);
+        }
         
         Integer statusCode = (Integer) result.get("code");
         if (statusCode != null && statusCode != 200) {

@@ -572,6 +572,89 @@ public class SourceController {
     }
     
     /**
+     * 检查源码是否有新版本可用
+     * 根据 codeName 和当前版本号检查是否有更新
+     */
+    @GetMapping("/sources/check-update")
+    public Map<String, Object> checkUpdate(@RequestParam String codeName, 
+                                           @RequestParam String currentVersion) {
+        try {
+            SourcePackage latest = repo.findLatestByCodeName(codeName);
+            
+            if (latest == null) {
+                return Map.of(
+                    "success", false, 
+                    "hasUpdate", false,
+                    "error", "未找到代码名为 " + codeName + " 的源码包"
+                );
+            }
+            
+            // 比较版本号
+            boolean hasUpdate = compareVersions(latest.getVersion(), currentVersion) > 0;
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("hasUpdate", hasUpdate);
+            result.put("currentVersion", currentVersion);
+            result.put("latestVersion", latest.getVersion());
+            result.put("codeName", codeName);
+            
+            if (hasUpdate) {
+                result.put("latestSha256", latest.getSha256());
+                result.put("latestName", latest.getName());
+                result.put("latestDescription", latest.getDescription());
+                result.put("latestFileSize", latest.getFileSize());
+                result.put("latestUploadTime", latest.getUploadTime());
+            }
+            
+            return result;
+            
+        } catch (Exception e) {
+            return Map.of("success", false, "error", "检查更新失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 比较版本号 (返回 >0 表示 v1 > v2, <0 表示 v1 < v2, =0 表示相等)
+     */
+    private int compareVersions(String v1, String v2) {
+        if (v1 == null || v2 == null) return 0;
+        
+        // 去除 v 前缀
+        v1 = v1.toLowerCase().replace("v", "").trim();
+        v2 = v2.toLowerCase().replace("v", "").trim();
+        
+        String[] parts1 = v1.split("\\.");
+        String[] parts2 = v2.split("\\.");
+        
+        int maxLen = Math.max(parts1.length, parts2.length);
+        
+        for (int i = 0; i < maxLen; i++) {
+            int num1 = i < parts1.length ? parseVersionPart(parts1[i]) : 0;
+            int num2 = i < parts2.length ? parseVersionPart(parts2[i]) : 0;
+            
+            if (num1 != num2) {
+                return num1 - num2;
+            }
+        }
+        
+        return 0;
+    }
+    
+    /**
+     * 解析版本号部分
+     */
+    private int parseVersionPart(String part) {
+        try {
+            // 移除非数字后缀 (如 1.0.0-beta)
+            String numPart = part.replaceAll("[^0-9].*", "");
+            return numPart.isEmpty() ? 0 : Integer.parseInt(numPart);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+    
+    /**
      * 自动递增版本号
      */
     private String incrementVersion(String currentVersion) {

@@ -15,6 +15,12 @@ public class DownloadToken {
     
     private Boolean used;
     
+    // 是否为更新请求（更新请求不扣除配额）
+    private Boolean isUpdate;
+    
+    // 更新时的源版本号
+    private String fromVersion;
+    
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;
 
@@ -27,6 +33,17 @@ public class DownloadToken {
         this.fileId = fileId;
         this.expireAt = expireAt;
         this.used = false;
+        this.isUpdate = false;
+    }
+    
+    public DownloadToken(String token, Long licenseId, String fileId, LocalDateTime expireAt, boolean isUpdate, String fromVersion) {
+        this.token = token;
+        this.licenseId = licenseId;
+        this.fileId = fileId;
+        this.expireAt = expireAt;
+        this.used = false;
+        this.isUpdate = isUpdate;
+        this.fromVersion = fromVersion;
     }
 
     // Getters and Setters
@@ -84,5 +101,21 @@ public class DownloadToken {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+    
+    public Boolean getIsUpdate() {
+        return isUpdate;
+    }
+
+    public void setIsUpdate(Boolean isUpdate) {
+        this.isUpdate = isUpdate;
+    }
+
+    public String getFromVersion() {
+        return fromVersion;
+    }
+
+    public void setFromVersion(String fromVersion) {
+        this.fromVersion = fromVersion;
     }
 }

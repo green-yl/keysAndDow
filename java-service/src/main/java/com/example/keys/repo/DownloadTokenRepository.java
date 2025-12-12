@@ -38,6 +38,18 @@ public class DownloadTokenRepository {
             token.setUsed(rs.getBoolean("used"));
             token.setCreatedAt(parseTimestamp(rs, "created_at"));
             
+            // 新增字段（兼容旧数据）
+            try {
+                token.setIsUpdate(rs.getBoolean("is_update"));
+            } catch (SQLException e) {
+                token.setIsUpdate(false);
+            }
+            try {
+                token.setFromVersion(rs.getString("from_version"));
+            } catch (SQLException e) {
+                token.setFromVersion(null);
+            }
+            
             return token;
         }
         
@@ -59,8 +71,8 @@ public class DownloadTokenRepository {
     };
     
     public Long insert(DownloadToken downloadToken) {
-        String sql = "INSERT INTO download_tokens (token, license_id, file_id, expire_at, used, created_at) " +
-                     "VALUES (?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO download_tokens (token, license_id, file_id, expire_at, used, is_update, from_version, created_at) " +
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         
         KeyHolder keyHolder = new GeneratedKeyHolder();
         
@@ -71,7 +83,9 @@ public class DownloadTokenRepository {
             ps.setString(3, downloadToken.getFileId());
             ps.setObject(4, downloadToken.getExpireAt());
             ps.setBoolean(5, downloadToken.getUsed());
-            ps.setObject(6, LocalDateTime.now());
+            ps.setBoolean(6, downloadToken.getIsUpdate() != null ? downloadToken.getIsUpdate() : false);
+            ps.setString(7, downloadToken.getFromVersion());
+            ps.setObject(8, LocalDateTime.now());
             return ps;
         }, keyHolder);
         

@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS download_tokens (
     file_id VARCHAR(128) NOT NULL,
     expire_at DATETIME NOT NULL,
     used BOOLEAN DEFAULT FALSE,
+    is_update BOOLEAN DEFAULT FALSE,
+    from_version VARCHAR(32),
     created_at DATETIME DEFAULT (datetime('now')),
     FOREIGN KEY (license_id) REFERENCES licenses(id)
 );
