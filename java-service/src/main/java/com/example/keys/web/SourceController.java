@@ -562,13 +562,56 @@ public class SourceController {
                                  "existingVersion", existingBySha.getVersion());
                 }
                 
-                // 删除旧文件
+                // 自动递增版本号（如果没有手动指定新版本）
+                if (version == null || version.trim().isEmpty()) {
+                    finalVersion = incrementVersion(sp.getVersion());
+                    result.put("versionAutoIncremented", true);
+                }
+                result.put("oldVersion", sp.getVersion());
+                
                 String oldSha256 = sp.getSha256();
+                var bucketDir = storage.bucketize(info.sha256());
+                
+                // 继承缩略图和logo到新目录（如果没有上传新的）
+                String newThumbPath = sp.getThumbnailPath();
+                String newLogoPath = sp.getLogoPath();
+                
+                if ((thumbnail == null || thumbnail.isEmpty()) && sp.getThumbnailPath() != null) {
+                    // 复制旧的缩略图到新目录
+                    try {
+                        java.nio.file.Path oldThumb = java.nio.file.Path.of(sp.getThumbnailPath());
+                        if (java.nio.file.Files.exists(oldThumb)) {
+                            String thumbName = oldThumb.getFileName().toString();
+                            java.nio.file.Path newThumb = bucketDir.resolve(thumbName);
+                            java.nio.file.Files.createDirectories(newThumb.getParent());
+                            java.nio.file.Files.copy(oldThumb, newThumb, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            newThumbPath = newThumb.toString();
+                        }
+                    } catch (Exception e) {
+                        // 忽略复制错误，保持原路径
+                    }
+                }
+                
+                if ((logo == null || logo.isEmpty()) && sp.getLogoPath() != null) {
+                    // 复制旧的logo到新目录
+                    try {
+                        java.nio.file.Path oldLogo = java.nio.file.Path.of(sp.getLogoPath());
+                        if (java.nio.file.Files.exists(oldLogo)) {
+                            String logoName = oldLogo.getFileName().toString();
+                            java.nio.file.Path newLogo = bucketDir.resolve(logoName);
+                            java.nio.file.Files.createDirectories(newLogo.getParent());
+                            java.nio.file.Files.copy(oldLogo, newLogo, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            newLogoPath = newLogo.toString();
+                        }
+                    } catch (Exception e) {
+                        // 忽略复制错误，保持原路径
+                    }
+                }
+                
+                // 删除旧的源码文件（不删除缩略图和logo，可能已被复制）
                 if (sp.getPackagePath() != null) {
                     try { java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(sp.getPackagePath())); } catch (Exception e) {}
                 }
-                
-                var bucketDir = storage.bucketize(info.sha256());
                 
                 // 上传到S3
                 String artifactUrl = null;
@@ -582,6 +625,14 @@ public class SourceController {
                 // 更新数据库记录（覆盖旧的文件信息）
                 repo.replacePackage(id, finalVersion, info.sha256(), bucketDir.toString(), 
                                    info.ext(), info.finalPath().toString(), artifactUrl, info.size());
+                
+                // 更新缩略图和logo路径
+                if (newThumbPath != null && !newThumbPath.equals(sp.getThumbnailPath())) {
+                    repo.updateThumbnail(id, newThumbPath, sp.getThumbnailUrl());
+                }
+                if (newLogoPath != null && !newLogoPath.equals(sp.getLogoPath())) {
+                    repo.updateLogo(id, newLogoPath, sp.getLogoUrl());
+                }
                 
                 result.put("packageUpdated", true);
                 result.put("oldSha256", oldSha256);
