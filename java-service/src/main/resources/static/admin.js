@@ -779,10 +779,43 @@ async function createPlanSilent(name, durationHours, initQuota, allowGrace, feat
     return await response.json();
 }
 
+// 源码排序状态
+let currentSortBy = 'update_time';
+let currentSortOrder = 'desc';
+
+// 切换排序方向
+function toggleSortOrder(field) {
+    if (currentSortBy === field) {
+        currentSortOrder = currentSortOrder === 'desc' ? 'asc' : 'desc';
+    } else {
+        currentSortBy = field;
+        currentSortOrder = 'desc';
+    }
+    loadSources();
+}
+
+// 排序按钮点击
+function sortSources(sortBy, sortOrder) {
+    currentSortBy = sortBy;
+    currentSortOrder = sortOrder;
+    loadSources();
+    
+    // 更新按钮状态
+    document.querySelectorAll('#sources .btn-group .btn').forEach(btn => {
+        btn.classList.remove('btn-secondary', 'active');
+        btn.classList.add('btn-outline-secondary');
+    });
+    const activeBtn = document.getElementById(sortBy === 'update_time' ? 'sortUpdateTime' : 'sortDownloads');
+    if (activeBtn) {
+        activeBtn.classList.remove('btn-outline-secondary');
+        activeBtn.classList.add('btn-secondary', 'active');
+    }
+}
+
 // 加载源码数据
 async function loadSources() {
     try {
-        const response = await fetch('/api/sources');
+        const response = await fetch(`/api/sources?sortBy=${currentSortBy}&sortOrder=${currentSortOrder}`);
         const data = await response.json();
         
         const tbody = document.getElementById('sourcesTable');
@@ -793,6 +826,7 @@ async function loadSources() {
                 const row = document.createElement('tr');
                 const thumbnailUrl = source.thumbnailUrl || (source.sha256 ? `/api/sources/by-sha/${source.sha256}/thumbnail` : '');
                 const downloadUrl = source.artifactUrl || `/d/${source.sha256}`;
+                const downloadCount = source.downloadCount || 0;
                 
                 row.innerHTML = `
                     <td>
@@ -811,6 +845,11 @@ async function loadSources() {
                         ${source.website ? `<small><a href="${source.website}" target="_blank">${source.website}</a></small>` : ''}
                     </td>
                     <td class="file-size">${formatFileSize(source.fileSize)}</td>
+                    <td>
+                        <span class="badge ${downloadCount > 0 ? 'bg-success' : 'bg-secondary'}">
+                            <i class="bi bi-download"></i> ${downloadCount}
+                        </span>
+                    </td>
                     <td><span class="status-badge status-${source.status}">${source.status}</span></td>
                     <td>${formatDateTime(source.updateTime)}</td>
                     <td>

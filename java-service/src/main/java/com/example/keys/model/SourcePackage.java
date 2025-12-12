@@ -23,6 +23,7 @@ public class SourcePackage {
     private String previewPath;
     private String previewUrl;
     private Long fileSize;
+    private Integer downloadCount;
     private String status;
     private LocalDateTime uploadTime;
     private LocalDateTime updateTime;
@@ -69,6 +70,8 @@ public class SourcePackage {
     public void setPreviewUrl(String previewUrl) { this.previewUrl = previewUrl; }
     public Long getFileSize() { return fileSize; }
     public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
+    public Integer getDownloadCount() { return downloadCount; }
+    public void setDownloadCount(Integer downloadCount) { this.downloadCount = downloadCount; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public LocalDateTime getUploadTime() { return uploadTime; }

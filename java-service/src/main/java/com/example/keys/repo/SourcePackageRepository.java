@@ -16,12 +16,31 @@ public class SourcePackageRepository {
     }
 
     public List<SourcePackage> findAll(String q) {
+        return findAll(q, "update_time", "desc");
+    }
+    
+    /**
+     * 支持排序的源码列表查询
+     * @param q 搜索关键词
+     * @param sortBy 排序字段: download_count, update_time, upload_time
+     * @param sortOrder 排序方向: asc, desc
+     */
+    public List<SourcePackage> findAll(String q, String sortBy, String sortOrder) {
+        // 验证排序字段，防止SQL注入
+        String orderColumn = switch (sortBy) {
+            case "download_count" -> "download_count";
+            case "upload_time" -> "upload_time";
+            case "file_size" -> "file_size";
+            default -> "update_time";
+        };
+        String order = "desc".equalsIgnoreCase(sortOrder) ? "DESC" : "ASC";
+        
         if (q == null || q.isBlank()) {
-            return jdbc.query("SELECT * FROM source_packages WHERE is_active = 1 ORDER BY upload_time DESC",
+            return jdbc.query("SELECT * FROM source_packages WHERE is_active = 1 ORDER BY " + orderColumn + " " + order,
                     new BeanPropertyRowMapper<>(SourcePackage.class));
         }
         String like = "%" + q + "%";
-        return jdbc.query("SELECT * FROM source_packages WHERE is_active=1 AND (name LIKE ? OR code_name LIKE ? OR version LIKE ? OR sha256 LIKE ?) ORDER BY upload_time DESC",
+        return jdbc.query("SELECT * FROM source_packages WHERE is_active=1 AND (name LIKE ? OR code_name LIKE ? OR version LIKE ? OR sha256 LIKE ?) ORDER BY " + orderColumn + " " + order,
                 new BeanPropertyRowMapper<>(SourcePackage.class), like, like, like, like);
     }
 
@@ -73,6 +92,20 @@ public class SourcePackageRepository {
     public int updateLogo(String id, String path, String url) {
         return jdbc.update("UPDATE source_packages SET logo_path=?, logo_url=?, update_time=datetime('now') WHERE id=?",
                 path, url, id);
+    }
+    
+    /**
+     * 增加下载计数
+     */
+    public int incrementDownloadCount(String sha256) {
+        return jdbc.update("UPDATE source_packages SET download_count = COALESCE(download_count, 0) + 1 WHERE sha256=? AND is_active=1", sha256);
+    }
+    
+    /**
+     * 根据ID增加下载计数
+     */
+    public int incrementDownloadCountById(String id) {
+        return jdbc.update("UPDATE source_packages SET download_count = COALESCE(download_count, 0) + 1 WHERE id=? AND is_active=1", id);
     }
 
     public int updatePreview(String id, String path, String url) {

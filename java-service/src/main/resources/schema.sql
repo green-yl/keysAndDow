@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS source_packages (
     preview_path TEXT,
     preview_url TEXT,
     file_size INTEGER,
+    download_count INTEGER DEFAULT 0,
     status TEXT DEFAULT 'uploaded',
     upload_time DATETIME DEFAULT (datetime('now')),
     update_time DATETIME DEFAULT (datetime('now')),
@@ -32,6 +33,8 @@ CREATE TABLE IF NOT EXISTS source_packages (
 CREATE INDEX IF NOT EXISTS idx_source_packages_code_name ON source_packages(code_name);
 CREATE INDEX IF NOT EXISTS idx_source_packages_sha256 ON source_packages(sha256);
 CREATE INDEX IF NOT EXISTS idx_source_packages_status ON source_packages(status);
+CREATE INDEX IF NOT EXISTS idx_source_packages_download_count ON source_packages(download_count);
+CREATE INDEX IF NOT EXISTS idx_source_packages_update_time ON source_packages(update_time);
 
 -- API Key 表
 CREATE TABLE IF NOT EXISTS api_keys (

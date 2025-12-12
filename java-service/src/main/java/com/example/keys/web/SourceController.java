@@ -186,8 +186,10 @@ public class SourceController {
     }
 
     @GetMapping("/sources")
-    public Map<String, Object> list(@RequestParam(value = "q", required = false) String q) {
-        List<SourcePackage> data = repo.findAll(q);
+    public Map<String, Object> list(@RequestParam(value = "q", required = false) String q,
+                                    @RequestParam(value = "sortBy", defaultValue = "update_time") String sortBy,
+                                    @RequestParam(value = "sortOrder", defaultValue = "desc") String sortOrder) {
+        List<SourcePackage> data = repo.findAll(q, sortBy, sortOrder);
         Map<String, Object> resp = new HashMap<>();
         resp.put("success", true); resp.put("data", data); return resp;
     }

@@ -194,6 +194,9 @@ public class DownloadController {
             String ip = getClientIpAddress(httpRequest);
             submitDownloadCommit(token, true, file.length(), fileId, ip, httpRequest.getHeader("User-Agent"));
             
+            // 7.5 增加下载计数
+            sourcePackageRepository.incrementDownloadCount(fileId);
+            
             // 8. 返回文件
             return ResponseEntity.ok()
                     .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, 
