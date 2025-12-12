@@ -104,6 +104,14 @@ public class SourcePackageRepository {
                 new BeanPropertyRowMapper<>(SourcePackage.class), sha256);
         return list.isEmpty() ? null : list.get(0);
     }
+    
+    /**
+     * 查找指定codeName的所有版本
+     */
+    public List<SourcePackage> findAllByCodeName(String codeName) {
+        return jdbc.query("SELECT * FROM source_packages WHERE code_name=? AND is_active=1 ORDER BY upload_time DESC",
+                new BeanPropertyRowMapper<>(SourcePackage.class), codeName);
+    }
 }
 
 

@@ -815,17 +815,17 @@ async function loadSources() {
                     <td>${formatDateTime(source.updateTime)}</td>
                     <td>
                         <div class="btn-group btn-group-sm">
-                            <button class="btn btn-info" onclick="editSource('${source.id}')" title="编辑">
-                                <i class="bi bi-pencil"></i>
+                            <button class="btn btn-primary" onclick="editSource('${source.id}')" title="更新源码">
+                                <i class="bi bi-arrow-repeat"></i>
+                            </button>
+                            <button class="btn btn-info" onclick="viewVersionHistory('${source.codeName}')" title="版本历史">
+                                <i class="bi bi-clock-history"></i>
                             </button>
                             <button class="btn btn-success" onclick="window.open('${downloadUrl}')" title="下载">
                                 <i class="bi bi-download"></i>
                             </button>
                             <button class="btn btn-warning" onclick="copyDownloadLink('${downloadUrl}')" title="复制链接">
                                 <i class="bi bi-link"></i>
-                            </button>
-                            <button class="btn btn-primary" onclick="viewSourceStats('${source.sha256}')" title="下载统计">
-                                <i class="bi bi-bar-chart"></i>
                             </button>
                             <button class="btn btn-danger" onclick="deleteSource('${source.id}')" title="删除">
                                 <i class="bi bi-trash"></i>
@@ -916,9 +916,139 @@ async function deleteSource(id) {
     }
 }
 
-// 编辑源码（简化实现）
-function editSource(id) {
-    showAlert('编辑功能开发中...', 'info');
+// 编辑源码（打开更新模态框）
+async function editSource(id) {
+    try {
+        const response = await fetch(`/api/sources/${id}`);
+        const result = await response.json();
+        
+        if (result.success && result.data) {
+            const source = result.data;
+            
+            // 填充当前信息
+            document.getElementById('updateSourceId').value = source.id;
+            document.getElementById('currentName').textContent = source.name;
+            document.getElementById('currentCodeName').textContent = source.codeName;
+            document.getElementById('currentVersion').textContent = source.version;
+            
+            // 清空表单输入
+            document.getElementById('updateVersion').value = '';
+            document.getElementById('updateSourceForm').reset();
+            document.getElementById('updateSourceId').value = source.id;
+            
+            // 保存源码信息供后续使用
+            window.currentEditingSource = source;
+            
+            new bootstrap.Modal(document.getElementById('updateSourceModal')).show();
+        } else {
+            showAlert('获取源码信息失败', 'danger');
+        }
+    } catch (error) {
+        console.error('获取源码信息失败:', error);
+        showAlert('获取源码信息失败', 'danger');
+    }
+}
+
+// 更新源码
+async function updateSource() {
+    const form = document.getElementById('updateSourceForm');
+    const formData = new FormData(form);
+    const sourceId = formData.get('sourceId');
+    
+    if (!sourceId) {
+        showAlert('未选择源码', 'danger');
+        return;
+    }
+    
+    // 检查是否有任何更新内容
+    const hasFile = formData.get('package') && formData.get('package').size > 0;
+    const hasThumbnail = formData.get('thumbnail') && formData.get('thumbnail').size > 0;
+    const hasName = formData.get('name') && formData.get('name').trim();
+    const hasDescription = formData.get('description') && formData.get('description').trim();
+    const hasVersion = formData.get('version') && formData.get('version').trim();
+    
+    if (!hasFile && !hasThumbnail && !hasName && !hasDescription) {
+        showAlert('请至少选择一项要更新的内容', 'warning');
+        return;
+    }
+    
+    try {
+        // 显示加载状态
+        const updateBtn = document.querySelector('#updateSourceModal .btn-success');
+        const originalText = updateBtn.innerHTML;
+        updateBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> 更新中...';
+        updateBtn.disabled = true;
+        
+        const response = await fetch(`/api/sources/${sourceId}/update`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        updateBtn.innerHTML = originalText;
+        updateBtn.disabled = false;
+        
+        if (result.success) {
+            let message = '源码更新成功！';
+            if (result.packageUpdated) {
+                message += ` 新版本: ${result.version}`;
+            }
+            if (result.thumbnailUpdated) {
+                message += ' (缩略图已更新)';
+            }
+            if (result.metaUpdated) {
+                message += ' (信息已更新)';
+            }
+            
+            showAlert(message, 'success');
+            bootstrap.Modal.getInstance(document.getElementById('updateSourceModal')).hide();
+            loadSources();
+        } else {
+            showAlert('更新失败: ' + result.error, 'danger');
+        }
+        
+    } catch (error) {
+        console.error('更新源码失败:', error);
+        showAlert('更新源码失败', 'danger');
+    }
+}
+
+// 查看版本历史
+async function viewVersionHistory(codeName) {
+    try {
+        const response = await fetch(`/api/sources/versions/${codeName}`);
+        const result = await response.json();
+        
+        if (result.success && result.data) {
+            const tbody = document.getElementById('versionHistoryTable');
+            tbody.innerHTML = '';
+            
+            result.data.forEach(version => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><strong>v${version.version}</strong></td>
+                    <td><code title="${version.sha256}">${version.sha256.substring(0, 16)}...</code></td>
+                    <td>${formatFileSize(version.fileSize)}</td>
+                    <td>${formatDateTime(version.uploadTime)}</td>
+                    <td>
+                        <button class="btn btn-sm btn-success" onclick="window.open('/d/${version.sha256}')" title="下载此版本">
+                            <i class="bi bi-download"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+            
+            new bootstrap.Modal(document.getElementById('versionHistoryModal')).show();
+        } else {
+            showAlert('获取版本历史失败: ' + (result.error || '未知错误'), 'danger');
+        }
+        
+    } catch (error) {
+        console.error('获取版本历史失败:', error);
+        showAlert('获取版本历史失败', 'danger');
+    }
 }
 
 // 查看源码下载统计

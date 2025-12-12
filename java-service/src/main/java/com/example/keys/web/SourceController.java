@@ -365,6 +365,237 @@ public class SourceController {
         return Map.of("success", true, "version", version, "sha256", info.sha256(), "artifactUrl", artifactUrl);
     }
 
+    /**
+     * 源码更新 - 上传新版本源码包（保留原有信息，只更新版本和文件）
+     * 这个接口用于快速更新源码，省去重复填写信息的烦恼
+     */
+    @PostMapping(value = "/sources/{id}/update", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Map<String, Object> updateSourcePackage(@PathVariable String id,
+                                                   @RequestParam(required = false) String version,
+                                                   @RequestParam(value = "package", required = false) MultipartFile file,
+                                                   @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail,
+                                                   @RequestParam(value = "name", required = false) String name,
+                                                   @RequestParam(value = "description", required = false) String description,
+                                                   @RequestParam(value = "country", required = false) String country,
+                                                   @RequestParam(value = "website", required = false) String website) throws Exception {
+        try {
+            var sp = repo.findById(id);
+            if (sp == null) {
+                return Map.of("success", false, "error", "源码包不存在");
+            }
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("id", id);
+            
+            // 更新元信息（如果提供）
+            boolean metaUpdated = false;
+            String finalName = name != null ? name : sp.getName();
+            String finalDesc = description != null ? description : sp.getDescription();
+            String finalCountry = country != null ? country : sp.getCountry();
+            String finalWebsite = website != null ? website : sp.getWebsite();
+            
+            if (name != null || description != null || country != null || website != null) {
+                repo.updateMeta(id, finalName, sp.getCodeName(), finalDesc, finalCountry, finalWebsite);
+                metaUpdated = true;
+                result.put("metaUpdated", true);
+            }
+            
+            // 更新缩略图（如果提供）
+            if (thumbnail != null && !thumbnail.isEmpty()) {
+                var bucketDir = storage.bucketize(sp.getSha256());
+                var t = storage.saveThumbnail(thumbnail.getInputStream(), thumbnail.getOriginalFilename(), bucketDir);
+                String thumbUrl = null;
+                if (s3.isEnabled()) {
+                    try (var in = java.nio.file.Files.newInputStream(t)) {
+                        String fname = t.getFileName().toString();
+                        String ct = fname.endsWith("png") ? "image/png" : (fname.endsWith("webp") ? "image/webp" : "image/jpeg");
+                        thumbUrl = s3.putObject(sp.getSha256() + "/" + fname, in, java.nio.file.Files.size(t), ct);
+                    }
+                }
+                repo.updateThumbnail(id, t.toString(), thumbUrl);
+                result.put("thumbnailUpdated", true);
+                result.put("thumbnailPath", t.toString());
+            }
+            
+            // 更新源码包（如果提供）
+            if (file != null && !file.isEmpty()) {
+                String newVersion = version != null ? version : incrementVersion(sp.getVersion());
+                
+                // 检查版本是否已存在
+                if (repo.existsByCodeNameAndVersion(sp.getCodeName(), newVersion, id)) {
+                    return Map.of("success", false, "error", "版本 " + newVersion + " 已存在，请指定新版本号");
+                }
+                
+                var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
+                var bucketDir = storage.bucketize(info.sha256());
+                
+                String artifactUrl = null;
+                if (s3.isEnabled()) {
+                    try (var in = java.nio.file.Files.newInputStream(info.finalPath())) {
+                        String key = info.sha256() + "/artifact" + info.ext();
+                        artifactUrl = s3.putObject(key, in, info.size(), "application/octet-stream");
+                    }
+                }
+                
+                repo.replacePackage(id, newVersion, info.sha256(), bucketDir.toString(), 
+                                   info.ext(), info.finalPath().toString(), artifactUrl, info.size());
+                
+                result.put("packageUpdated", true);
+                result.put("version", newVersion);
+                result.put("sha256", info.sha256());
+                result.put("fileSize", info.size());
+                if (artifactUrl != null) {
+                    result.put("artifactUrl", artifactUrl);
+                }
+            }
+            
+            return result;
+            
+        } catch (Exception e) {
+            return Map.of("success", false, "error", "更新失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 基于codeName创建新版本（快速发布新版本）
+     */
+    @PostMapping(value = "/sources/new-version", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Map<String, Object> createNewVersion(@RequestParam String codeName,
+                                                @RequestParam String version,
+                                                @RequestParam("package") MultipartFile file,
+                                                @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail,
+                                                @RequestParam(value = "changelog", required = false) String changelog) throws Exception {
+        try {
+            // 查找该codeName的最新版本
+            var latestSp = repo.findLatestByCodeName(codeName);
+            if (latestSp == null) {
+                return Map.of("success", false, "error", "未找到代码名为 " + codeName + " 的源码包，请先创建");
+            }
+            
+            // 检查版本是否已存在
+            if (repo.existsByCodeNameAndVersion(codeName, version, null)) {
+                return Map.of("success", false, "error", "版本 " + version + " 已存在");
+            }
+            
+            // 保存新文件
+            var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
+            
+            // 检查SHA256是否重复
+            var existing = repo.findBySha256(info.sha256());
+            if (existing != null) {
+                return Map.of("success", false, "error", "该文件已存在（SHA256重复）", "existingId", existing.getId());
+            }
+            
+            var bucketDir = storage.bucketize(info.sha256());
+            
+            // 创建新的源码包记录，继承原有信息
+            SourcePackage sp = new SourcePackage();
+            sp.setId(UUID.randomUUID().toString());
+            sp.setName(latestSp.getName());
+            sp.setCodeName(codeName);
+            sp.setVersion(version);
+            sp.setDescription(changelog != null ? changelog : latestSp.getDescription());
+            sp.setCountry(latestSp.getCountry());
+            sp.setWebsite(latestSp.getWebsite());
+            sp.setSha256(info.sha256());
+            sp.setBucketRelPath(bucketDir.toString());
+            sp.setPackageExt(info.ext());
+            sp.setPackagePath(info.finalPath().toString());
+            sp.setFileSize(info.size());
+            sp.setStatus("uploaded");
+            
+            // 处理缩略图
+            if (thumbnail != null && !thumbnail.isEmpty()) {
+                var t = storage.saveThumbnail(thumbnail.getInputStream(), thumbnail.getOriginalFilename(), bucketDir);
+                sp.setThumbnailPath(t.toString());
+            } else if (latestSp.getThumbnailPath() != null) {
+                // 复用原有缩略图
+                sp.setThumbnailPath(latestSp.getThumbnailPath());
+                sp.setThumbnailUrl(latestSp.getThumbnailUrl());
+            }
+            
+            // 继承logo和preview
+            sp.setLogoPath(latestSp.getLogoPath());
+            sp.setLogoUrl(latestSp.getLogoUrl());
+            sp.setPreviewPath(latestSp.getPreviewPath());
+            sp.setPreviewUrl(latestSp.getPreviewUrl());
+            
+            // 上传到S3
+            if (s3.isEnabled()) {
+                try (var in = java.nio.file.Files.newInputStream(info.finalPath())) {
+                    String key = sp.getSha256() + "/artifact" + sp.getPackageExt();
+                    String url = s3.putObject(key, in, sp.getFileSize(), "application/octet-stream");
+                    sp.setArtifactUrl(url);
+                }
+                
+                if (thumbnail != null && !thumbnail.isEmpty() && sp.getThumbnailPath() != null) {
+                    var p = java.nio.file.Path.of(sp.getThumbnailPath());
+                    try (var in = java.nio.file.Files.newInputStream(p)) {
+                        String fname = p.getFileName().toString();
+                        String ct = fname.endsWith("png") ? "image/png" : (fname.endsWith("webp") ? "image/webp" : "image/jpeg");
+                        String url = s3.putObject(sp.getSha256() + "/" + fname, in, java.nio.file.Files.size(p), ct);
+                        sp.setThumbnailUrl(url);
+                    }
+                }
+            }
+            
+            repo.insert(sp);
+            
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("id", sp.getId());
+            result.put("codeName", codeName);
+            result.put("version", version);
+            result.put("sha256", sp.getSha256());
+            result.put("fileSize", sp.getFileSize());
+            if (sp.getArtifactUrl() != null) result.put("artifactUrl", sp.getArtifactUrl());
+            if (sp.getThumbnailUrl() != null) result.put("thumbnailUrl", sp.getThumbnailUrl());
+            
+            return result;
+            
+        } catch (Exception e) {
+            return Map.of("success", false, "error", "创建新版本失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 获取源码包的所有版本
+     */
+    @GetMapping("/sources/versions/{codeName}")
+    public Map<String, Object> getVersionsByCodeName(@PathVariable String codeName) {
+        List<SourcePackage> versions = repo.findAllByCodeName(codeName);
+        if (versions == null || versions.isEmpty()) {
+            return Map.of("success", false, "error", "未找到代码名为 " + codeName + " 的源码包");
+        }
+        return Map.of("success", true, "data", versions, "count", versions.size());
+    }
+    
+    /**
+     * 自动递增版本号
+     */
+    private String incrementVersion(String currentVersion) {
+        if (currentVersion == null || currentVersion.isEmpty()) {
+            return "1.0.1";
+        }
+        
+        try {
+            String[] parts = currentVersion.split("\\.");
+            if (parts.length >= 3) {
+                int patch = Integer.parseInt(parts[parts.length - 1]) + 1;
+                parts[parts.length - 1] = String.valueOf(patch);
+                return String.join(".", parts);
+            } else if (parts.length == 2) {
+                int minor = Integer.parseInt(parts[1]) + 1;
+                return parts[0] + "." + minor + ".0";
+            } else {
+                return currentVersion + ".1";
+            }
+        } catch (NumberFormatException e) {
+            return currentVersion + ".1";
+        }
+    }
+
     @GetMapping("/sources/{id}/verify")
     public Map<String, Object> verify(@PathVariable String id) throws Exception {
         SourcePackage sp = repo.findById(id);
