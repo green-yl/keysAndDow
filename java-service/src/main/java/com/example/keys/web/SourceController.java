@@ -799,6 +799,9 @@ public class SourceController {
                 result.put("latestDescription", latest.getDescription());
                 result.put("latestFileSize", latest.getFileSize());
                 result.put("latestUploadTime", latest.getUploadTime());
+                // 添加 logo 和 thumbnail URL
+                result.put("latestLogoUrl", latest.getLogoUrl());
+                result.put("latestThumbnailUrl", latest.getThumbnailUrl());
             }
             
             return result;
