@@ -12,8 +12,6 @@ services:
       - SPRING_SQL_INIT_MODE=always
       - APP_CORS_ALLOWED_ORIGINS=*
       - APP_SECURITY_REQUIRE_API_KEY=false
-      - APP_LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY:-}
-      - APP_LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY:-}
     volumes:
       # 数据持久化
       - ./data:/app/data
