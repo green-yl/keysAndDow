@@ -4,6 +4,24 @@ let plans = [];
 let codes = [];
 let licenses = [];
 
+// 封装 fetch，自动处理 401 跳转登录页
+const authFetch = async (url, options = {}) => {
+    const resp = await fetch(url, options);
+    if (resp.status === 401 && !url.includes('/api/auth/admin/')) {
+        window.location.href = '/admin-login.html';
+        throw new Error('未登录');
+    }
+    return resp;
+};
+
+// 退出登录
+async function adminLogout() {
+    try {
+        await fetch('/api/auth/admin/logout', { method: 'POST' });
+    } catch (e) { /* ignore */ }
+    window.location.href = '/admin-login.html';
+}
+
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     loadDashboard();
@@ -53,10 +71,10 @@ function showSection(section) {
 async function loadDashboard() {
     try {
         const [plansRes, codesRes, licensesRes, statsRes] = await Promise.all([
-            fetch('/api/admin/plans'),
-            fetch('/api/admin/codes'),
-            fetch('/api/admin/licenses'),
-            fetch('/api/admin/stats/downloads')
+            authFetch('/api/admin/plans'),
+            authFetch('/api/admin/codes'),
+            authFetch('/api/admin/licenses'),
+            authFetch('/api/admin/stats/downloads')
         ]);
         
         const plansData = await plansRes.json();
@@ -78,7 +96,7 @@ async function loadDashboard() {
 // 加载套餐数据
 async function loadPlans() {
     try {
-        const response = await fetch('/api/admin/plans');
+        const response = await authFetch('/api/admin/plans');
         plans = await response.json();
         
         const tbody = document.getElementById('plansTable');
@@ -112,7 +130,7 @@ async function loadPlans() {
 // 加载激活码数据
 async function loadCodes() {
     try {
-        const response = await fetch('/api/admin/codes');
+        const response = await authFetch('/api/admin/codes');
         codes = await response.json();
         
         const tbody = document.getElementById('codesTable');
@@ -150,7 +168,7 @@ async function loadCodes() {
 // 加载许可证数据
 async function loadLicenses() {
     try {
-        const response = await fetch('/api/admin/licenses');
+        const response = await authFetch('/api/admin/licenses');
         licenses = await response.json();
         
         const tbody = document.getElementById('licensesTable');
@@ -190,7 +208,7 @@ async function loadLicenses() {
 // 加载下载统计
 async function loadStats() {
     try {
-        const response = await fetch('/api/admin/stats/downloads');
+        const response = await authFetch('/api/admin/stats/downloads');
         const stats = await response.json();
         
         document.getElementById('statsToday').textContent = stats.today_downloads || 0;
@@ -345,7 +363,7 @@ async function clearAllAuditLogs() {
     }
     
     try {
-        const response = await fetch('/api/admin/audit-logs', {
+        const response = await authFetch('/api/admin/audit-logs', {
             method: 'DELETE'
         });
         
@@ -416,7 +434,7 @@ async function createPlan() {
     };
     
     try {
-        const response = await fetch('/api/admin/plans', {
+        const response = await authFetch('/api/admin/plans', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -516,7 +534,7 @@ async function batchCreateCodes() {
     };
     
     try {
-        const response = await fetch('/api/admin/codes/batch', {
+        const response = await authFetch('/api/admin/codes/batch', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -768,7 +786,7 @@ async function createPlanSilent(name, durationHours, initQuota, allowGrace, feat
         features: features
     };
     
-    const response = await fetch('/api/admin/plans', {
+    const response = await authFetch('/api/admin/plans', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
