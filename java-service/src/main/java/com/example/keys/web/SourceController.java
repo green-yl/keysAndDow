@@ -721,8 +721,9 @@ public class SourceController {
                                  "existingVersion", existingBySha.getVersion());
                 }
                 
-                // 自动递增版本号（如果没有手动指定新版本）
-                if (version == null || version.trim().isEmpty()) {
+                // 上传新包时版本必须前进，否则客户端按版本检查会误判为已是最新。
+                if (version == null || version.trim().isEmpty()
+                        || VersionUtils.compare(finalVersion, sp.getVersion()) <= 0) {
                     finalVersion = VersionUtils.increment(sp.getVersion());
                     result.put("versionAutoIncremented", true);
                 }
