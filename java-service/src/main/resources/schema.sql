@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS source_packages (
     preview_url TEXT,
     file_size INTEGER,
     download_count INTEGER DEFAULT 0,
+    is_hidden INTEGER DEFAULT 0,
+    install_code TEXT,
     status TEXT DEFAULT 'uploaded',
     upload_time DATETIME DEFAULT (datetime('now')),
     update_time DATETIME DEFAULT (datetime('now')),
@@ -141,4 +143,3 @@ CREATE INDEX IF NOT EXISTS idx_download_events_license_id ON download_events(lic
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
-

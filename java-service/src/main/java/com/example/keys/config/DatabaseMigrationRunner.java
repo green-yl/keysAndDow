@@ -28,6 +28,8 @@ public class DatabaseMigrationRunner implements CommandLineRunner {
         ensureColumn("source_packages", "logo_url", "TEXT");
         ensureColumn("source_packages", "preview_path", "TEXT");
         ensureColumn("source_packages", "preview_url", "TEXT");
+        ensureColumn("source_packages", "is_hidden", "INTEGER DEFAULT 0");
+        ensureColumn("source_packages", "install_code", "TEXT");
         
         // 添加 licenses 表的服务器IP相关字段
         ensureColumn("licenses", "server_ip", "VARCHAR(45)");
@@ -57,5 +59,4 @@ public class DatabaseMigrationRunner implements CommandLineRunner {
         return false;
     }
 }
-
 

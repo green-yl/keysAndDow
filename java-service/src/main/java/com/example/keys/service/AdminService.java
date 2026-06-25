@@ -6,11 +6,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.LocalDateTime;
 import java.util.*;
 
 @Service
 public class AdminService {
+    private static final Logger log = LoggerFactory.getLogger(AdminService.class);
     
     @Autowired
     private PlanRepository planRepository;
@@ -174,7 +178,7 @@ public class AdminService {
                     String.format("删除许可证ID: %d, 激活码: %s", license.getId(), code)
                 ));
             } catch (Exception e) {
-                System.err.println("删除许可证失败: " + e.getMessage());
+                log.error("删除许可证失败: licenseId={}", license.getId(), e);
             }
         }
         
@@ -413,16 +417,14 @@ public class AdminService {
     /**
      * 生成激活码
      */
+    private static final java.security.SecureRandom SECURE_RANDOM = new java.security.SecureRandom();
+
     private String generateActivationCode() {
-        // 生成64位随机激活码
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        Random random = new Random();
-        StringBuilder code = new StringBuilder();
-        
+        StringBuilder code = new StringBuilder(64);
         for (int i = 0; i < 64; i++) {
-            code.append(chars.charAt(random.nextInt(chars.length())));
+            code.append(chars.charAt(SECURE_RANDOM.nextInt(chars.length())));
         }
-        
         return code.toString();
     }
 }

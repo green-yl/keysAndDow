@@ -18,6 +18,10 @@ public class SourcePackageRepository {
     public List<SourcePackage> findAll(String q) {
         return findAll(q, "update_time", "desc");
     }
+
+    public List<SourcePackage> findAllIncludingHidden(String q, String sortBy, String sortOrder) {
+        return findAll(q, sortBy, sortOrder, true);
+    }
     
     /**
      * 支持排序的源码列表查询
@@ -26,6 +30,10 @@ public class SourcePackageRepository {
      * @param sortOrder 排序方向: asc, desc
      */
     public List<SourcePackage> findAll(String q, String sortBy, String sortOrder) {
+        return findAll(q, sortBy, sortOrder, false);
+    }
+
+    private List<SourcePackage> findAll(String q, String sortBy, String sortOrder, boolean includeHidden) {
         // 验证排序字段，防止SQL注入
         String orderColumn = switch (sortBy) {
             case "download_count" -> "download_count";
@@ -34,13 +42,14 @@ public class SourcePackageRepository {
             default -> "update_time";
         };
         String order = "desc".equalsIgnoreCase(sortOrder) ? "DESC" : "ASC";
+        String visibilityClause = includeHidden ? "" : " AND COALESCE(is_hidden, 0)=0";
         
         if (q == null || q.isBlank()) {
-            return jdbc.query("SELECT * FROM source_packages WHERE is_active = 1 ORDER BY " + orderColumn + " " + order,
+            return jdbc.query("SELECT * FROM source_packages WHERE is_active = 1" + visibilityClause + " ORDER BY " + orderColumn + " " + order,
                     new BeanPropertyRowMapper<>(SourcePackage.class));
         }
         String like = "%" + q + "%";
-        return jdbc.query("SELECT * FROM source_packages WHERE is_active=1 AND (name LIKE ? OR code_name LIKE ? OR version LIKE ? OR sha256 LIKE ?) ORDER BY " + orderColumn + " " + order,
+        return jdbc.query("SELECT * FROM source_packages WHERE is_active=1" + visibilityClause + " AND (name LIKE ? OR code_name LIKE ? OR version LIKE ? OR sha256 LIKE ?) ORDER BY " + orderColumn + " " + order,
                 new BeanPropertyRowMapper<>(SourcePackage.class), like, like, like, like);
     }
 
@@ -52,8 +61,8 @@ public class SourcePackageRepository {
 
     public int insert(SourcePackage sp) {
         // 让 upload_time 与 is_active 使用表默认值，避免列数与值数不匹配
-        return jdbc.update("INSERT INTO source_packages (id,name,code_name,version,description,country,website,sha256,bucket_rel_path,package_ext,package_path,artifact_url,thumbnail_path,thumbnail_url,logo_path,logo_url,preview_path,preview_url,file_size,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                sp.getId(), sp.getName(), sp.getCodeName(), sp.getVersion(), sp.getDescription(), sp.getCountry(), sp.getWebsite(), sp.getSha256(), sp.getBucketRelPath(), sp.getPackageExt(), sp.getPackagePath(), sp.getArtifactUrl(), sp.getThumbnailPath(), sp.getThumbnailUrl(), sp.getLogoPath(), sp.getLogoUrl(), sp.getPreviewPath(), sp.getPreviewUrl(), sp.getFileSize(), sp.getStatus());
+        return jdbc.update("INSERT INTO source_packages (id,name,code_name,version,description,country,website,sha256,bucket_rel_path,package_ext,package_path,artifact_url,thumbnail_path,thumbnail_url,logo_path,logo_url,preview_path,preview_url,file_size,is_hidden,install_code,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                sp.getId(), sp.getName(), sp.getCodeName(), sp.getVersion(), sp.getDescription(), sp.getCountry(), sp.getWebsite(), sp.getSha256(), sp.getBucketRelPath(), sp.getPackageExt(), sp.getPackagePath(), sp.getArtifactUrl(), sp.getThumbnailPath(), sp.getThumbnailUrl(), sp.getLogoPath(), sp.getLogoUrl(), sp.getPreviewPath(), sp.getPreviewUrl(), sp.getFileSize(), sp.getIsHidden(), sp.getInstallCode(), sp.getStatus());
     }
 
     public int markDeleted(String id) {
@@ -113,6 +122,16 @@ public class SourcePackageRepository {
                 path, url, id);
     }
 
+    public int updateVisibilityForCodeName(String codeName, boolean hidden, String installCode) {
+        return jdbc.update("UPDATE source_packages SET is_hidden=?, install_code=?, artifact_url=CASE WHEN ?=1 THEN NULL ELSE artifact_url END, update_time=datetime('now') WHERE code_name=? AND is_active=1",
+                hidden ? 1 : 0, hidden ? installCode : null, hidden ? 1 : 0, codeName);
+    }
+
+    public int clearArtifactUrlForCodeName(String codeName) {
+        return jdbc.update("UPDATE source_packages SET artifact_url=NULL, update_time=datetime('now') WHERE code_name=? AND is_active=1",
+                codeName);
+    }
+
     public int replacePackage(String id, String version, String sha256, String bucketRelPath, String packageExt,
                               String packagePath, String artifactUrl, Long fileSize) {
         return jdbc.update("UPDATE source_packages SET version=?, sha256=?, bucket_rel_path=?, package_ext=?, package_path=?, artifact_url=?, file_size=?, extracted_path=NULL, status='uploaded', update_time=datetime('now') WHERE id=?",
@@ -152,6 +171,12 @@ public class SourcePackageRepository {
                 new BeanPropertyRowMapper<>(SourcePackage.class), sha256);
         return list.isEmpty() ? null : list.get(0);
     }
+
+    public SourcePackage findHiddenByInstallCode(String installCode) {
+        List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE install_code=? AND COALESCE(is_hidden, 0)=1 AND is_active=1 ORDER BY upload_time DESC LIMIT 1",
+                new BeanPropertyRowMapper<>(SourcePackage.class), installCode);
+        return list.isEmpty() ? null : list.get(0);
+    }
     
     /**
      * 查找指定codeName的所有版本
@@ -161,5 +186,3 @@ public class SourcePackageRepository {
                 new BeanPropertyRowMapper<>(SourcePackage.class), codeName);
     }
 }
-
-

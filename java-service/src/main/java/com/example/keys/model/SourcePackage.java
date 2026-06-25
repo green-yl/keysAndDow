@@ -24,6 +24,8 @@ public class SourcePackage {
     private String previewUrl;
     private Long fileSize;
     private Integer downloadCount;
+    private Integer isHidden;
+    private String installCode;
     private String status;
     private LocalDateTime uploadTime;
     private LocalDateTime updateTime;
@@ -72,6 +74,11 @@ public class SourcePackage {
     public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
     public Integer getDownloadCount() { return downloadCount; }
     public void setDownloadCount(Integer downloadCount) { this.downloadCount = downloadCount; }
+    public Integer getIsHidden() { return isHidden; }
+    public void setIsHidden(Integer isHidden) { this.isHidden = isHidden; }
+    public String getInstallCode() { return installCode; }
+    public void setInstallCode(String installCode) { this.installCode = installCode; }
+    public boolean isHiddenEnabled() { return isHidden != null && isHidden != 0; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public LocalDateTime getUploadTime() { return uploadTime; }
@@ -83,5 +90,4 @@ public class SourcePackage {
     public Integer getIsActive() { return isActive; }
     public void setIsActive(Integer isActive) { this.isActive = isActive; }
 }
-
 

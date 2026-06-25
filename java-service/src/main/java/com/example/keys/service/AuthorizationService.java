@@ -2,9 +2,11 @@ package com.example.keys.service;
 
 import com.example.keys.model.*;
 import com.example.keys.repo.*;
+import com.example.keys.util.VersionUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -38,6 +40,12 @@ public class AuthorizationService {
     
     @Autowired
     private ServerManagementService serverManagementService;
+
+    @Autowired
+    private SourcePackageRepository sourcePackageRepository;
+
+    @Autowired
+    private SourceAccessService sourceAccessService;
     
     /**
      * 激活许可证
@@ -245,6 +253,13 @@ public class AuthorizationService {
         Map<String, Object> result = new HashMap<>();
         
         try {
+            if (!StringUtils.hasText(payloadBase64) || !StringUtils.hasText(signature) || !StringUtils.hasText(hwid)) {
+                result.put("ok", false);
+                result.put("error", "需要有效授权参数：license payload, signature, hwid");
+                result.put("code", 401);
+                return result;
+            }
+
             // 1. 验证签名
             if (!licenseSignatureService.verifyLicense(payloadBase64, signature)) {
                 result.put("ok", false);
@@ -310,7 +325,13 @@ public class AuthorizationService {
      */
     public Map<String, Object> downloadPreauth(String payloadBase64, String signature, String hwid, 
                                                String fileId, Map<String, Object> clientInfo, String ip) {
-        return downloadPreauthInternal(payloadBase64, signature, hwid, fileId, clientInfo, ip, false, null);
+        return downloadPreauth(payloadBase64, signature, hwid, fileId, clientInfo, ip, null);
+    }
+
+    public Map<String, Object> downloadPreauth(String payloadBase64, String signature, String hwid,
+                                               String fileId, Map<String, Object> clientInfo, String ip,
+                                               String installCode) {
+        return downloadPreauthInternal(payloadBase64, signature, hwid, fileId, clientInfo, ip, false, null, installCode);
     }
     
     /**
@@ -319,7 +340,13 @@ public class AuthorizationService {
     public Map<String, Object> downloadPreauthForUpdate(String payloadBase64, String signature, String hwid, 
                                                         String fileId, Map<String, Object> clientInfo, String ip,
                                                         String fromVersion) {
-        return downloadPreauthInternal(payloadBase64, signature, hwid, fileId, clientInfo, ip, true, fromVersion);
+        return downloadPreauthForUpdate(payloadBase64, signature, hwid, fileId, clientInfo, ip, fromVersion, null);
+    }
+
+    public Map<String, Object> downloadPreauthForUpdate(String payloadBase64, String signature, String hwid,
+                                                        String fileId, Map<String, Object> clientInfo, String ip,
+                                                        String fromVersion, String installCode) {
+        return downloadPreauthInternal(payloadBase64, signature, hwid, fileId, clientInfo, ip, true, fromVersion, installCode);
     }
     
     /**
@@ -327,25 +354,11 @@ public class AuthorizationService {
      */
     private Map<String, Object> downloadPreauthInternal(String payloadBase64, String signature, String hwid, 
                                                         String fileId, Map<String, Object> clientInfo, String ip,
-                                                        boolean isUpdate, String fromVersion) {
+                                                        boolean isUpdate, String fromVersion, String installCode) {
         Map<String, Object> result = new HashMap<>();
         
         try {
-            // 0. 限流检查
-            if (!rateLimitService.allowGlobal()) {
-                result.put("ok", false);
-                result.put("error", "系统繁忙，请稍后重试");
-                result.put("code", 429);
-                return result;
-            }
-            
-            if (!rateLimitService.allowDevice(hwid)) {
-                result.put("ok", false);
-                result.put("error", "设备操作过于频繁，请稍后重试");
-                result.put("code", 429);
-                return result;
-            }
-            // 1. 验证许可证
+            // 1. 验证许可证和 HWID
             Map<String, Object> statusResult = getLicenseStatus(payloadBase64, signature, hwid);
             if (!(Boolean) statusResult.get("ok")) {
                 return statusResult;
@@ -371,44 +384,102 @@ public class AuthorizationService {
             if (!(Boolean) serverBindingResult.get("ok")) {
                 return serverBindingResult; // 返回服务器绑定检查的错误结果
             }
+
+            SourcePackage sourcePackage = sourcePackageRepository.findBySha256(fileId);
+            if (sourcePackage == null) {
+                result.put("ok", false);
+                result.put("error", "源码文件不存在");
+                result.put("code", 404);
+                return result;
+            }
+
+            boolean verifiedUpdate = false;
+            if (isUpdate) {
+                if (fromVersion == null || fromVersion.isBlank()) {
+                    result.put("ok", false);
+                    result.put("error", "更新下载缺少 from_version");
+                    result.put("code", 400);
+                    return result;
+                }
+
+                SourcePackage previousPackage = resolvePreviousVersion(sourcePackage, fromVersion);
+                if (previousPackage != null && previousPackage.getSha256().equals(sourcePackage.getSha256())) {
+                    result.put("ok", false);
+                    result.put("error", "更新来源版本不存在或无效");
+                    result.put("code", 403);
+                    return result;
+                }
+                String baselineVersion = previousPackage != null ? previousPackage.getVersion() : fromVersion;
+                if (VersionUtils.compare(sourcePackage.getVersion(), baselineVersion) <= 0) {
+                    result.put("ok", false);
+                    result.put("error", "更新来源版本不存在或无效");
+                    result.put("code", 403);
+                    return result;
+                }
+
+                verifiedUpdate = true;
+            }
+
+            // 4. 首次下载检查下载额度；更新下载不扣额度，也不因额度为 0 被拦截。
+            if (!verifiedUpdate) {
+                boolean allowGrace = license.getPlanAllowGrace() != null && license.getPlanAllowGrace();
+
+                if (license.getDownloadQuotaRemaining() <= 0 && !allowGrace) {
+                    result.put("ok", false);
+                    result.put("error", "下载额度已用完");
+                    result.put("code", 402);
+                    return result;
+                }
+
+                if (license.getDownloadQuotaRemaining() < 0 && allowGrace) {
+                    result.put("ok", false);
+                    result.put("error", "下载额度已超额，不允许继续下载");
+                    result.put("code", 402);
+                    return result;
+                }
+            }
+
+            // 5. 限流检查放在授权、绑定和额度之后，保证安装码不会成为绕过授权的入口。
+            if (!rateLimitService.allowGlobal()) {
+                result.put("ok", false);
+                result.put("error", "系统繁忙，请稍后重试");
+                result.put("code", 429);
+                return result;
+            }
             
-            // 许可证级别限流
+            if (!rateLimitService.allowDevice(hwid)) {
+                result.put("ok", false);
+                result.put("error", "设备操作过于频繁，请稍后重试");
+                result.put("code", 429);
+                return result;
+            }
+            
             if (!rateLimitService.allowPreauth(license.getId().toString())) {
                 result.put("ok", false);
                 result.put("error", "预授权请求过于频繁，请稍后重试");
                 result.put("code", 429);
                 return result;
             }
-            
-            // 3. 检查下载额度
-            boolean allowGrace = license.getPlanAllowGrace() != null && license.getPlanAllowGrace();
-            
-            if (license.getDownloadQuotaRemaining() <= 0 && !allowGrace) {
-                result.put("ok", false);
-                result.put("error", "下载额度已用完");
-                result.put("code", 402);
-                return result;
-            }
-            
-            if (license.getDownloadQuotaRemaining() < 0 && allowGrace) {
-                result.put("ok", false);
-                result.put("error", "下载额度已超额，不允许继续下载");
-                result.put("code", 402);
-                return result;
+
+            if (!verifiedUpdate) {
+                Map<String, Object> installCodeResult = sourceAccessService.validateInstallCode(sourcePackage, installCode);
+                if (!(Boolean) installCodeResult.get("ok")) {
+                    return installCodeResult;
+                }
             }
             
             // 4. 生成下载令牌
             String token = UUID.randomUUID().toString().replace("-", "");
             LocalDateTime expireAt = LocalDateTime.now().plusMinutes(10); // 10分钟有效期
             
-            DownloadToken downloadToken = new DownloadToken(token, license.getId(), fileId, expireAt, isUpdate, fromVersion);
+            DownloadToken downloadToken = new DownloadToken(token, license.getId(), fileId, expireAt, verifiedUpdate, fromVersion);
             downloadTokenRepository.insert(downloadToken);
             
             // 5. 生成下载URL（这里简化处理，实际应该根据fileId生成具体的下载URL）
             String downloadUrl = "/api/download/file/" + fileId + "?token=" + token;
             
             // 6. 预览额度变化
-            int willBe = Math.max(0, license.getDownloadQuotaRemaining() - 1);
+            int willBe = verifiedUpdate ? license.getDownloadQuotaRemaining() : Math.max(0, license.getDownloadQuotaRemaining() - 1);
             
             result.put("ok", true);
             result.put("download_token", token);
@@ -427,6 +498,23 @@ public class AuthorizationService {
             result.put("code", 500);
             return result;
         }
+    }
+
+    private SourcePackage resolvePreviousVersion(SourcePackage targetPackage, String fromVersion) {
+        SourcePackage previousPackage = sourcePackageRepository.findByCodeAndVersion(targetPackage.getCodeName(), fromVersion);
+        if (previousPackage != null) {
+            return previousPackage;
+        }
+
+        for (SourcePackage candidate : sourcePackageRepository.findAllByCodeName(targetPackage.getCodeName())) {
+            if (candidate == null || candidate.getVersion() == null) {
+                continue;
+            }
+            if (VersionUtils.compare(candidate.getVersion(), fromVersion) == 0) {
+                return candidate;
+            }
+        }
+        return null;
     }
     
     /**

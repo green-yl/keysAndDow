@@ -1,6 +1,8 @@
 package com.example.keys.web;
 
 import com.example.keys.service.AuthorizationService;
+import com.example.keys.util.IpUtils;
+import com.example.keys.util.ResponseHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -16,9 +18,6 @@ public class LicenseController {
     @Autowired
     private AuthorizationService authorizationService;
     
-    /**
-     * 激活许可证
-     */
     @PostMapping("/activate")
     public ResponseEntity<?> activate(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
         String code = (String) request.get("code");
@@ -38,30 +37,11 @@ public class LicenseController {
             ));
         }
         
-        String ip = getClientIpAddress(httpRequest);
+        String ip = IpUtils.getClientIpAddress(httpRequest);
         Map<String, Object> result = authorizationService.activateLicense(code, hwid, sub, clientInfo, ip);
-        
-        Integer statusCode = (Integer) result.get("code");
-        if (statusCode != null && statusCode != 200) {
-            if (statusCode == 400) {
-                return ResponseEntity.badRequest().body(result);
-            } else if (statusCode == 401) {
-                return ResponseEntity.status(401).body(result);
-            } else if (statusCode == 403) {
-                return ResponseEntity.status(403).body(result);
-            } else if (statusCode == 409) {
-                return ResponseEntity.status(409).body(result);
-            } else {
-                return ResponseEntity.status(500).body(result);
-            }
-        }
-        
-        return ResponseEntity.ok(result);
+        return ResponseHelper.fromServiceResult(result);
     }
     
-    /**
-     * 查看许可证状态
-     */
     @PostMapping("/status")
     public ResponseEntity<?> status(@RequestBody Map<String, Object> request) {
         @SuppressWarnings("unchecked")
@@ -86,26 +66,9 @@ public class LicenseController {
         }
         
         Map<String, Object> result = authorizationService.getLicenseStatus(payload, sig, hwid);
-        
-        Integer statusCode = (Integer) result.get("code");
-        if (statusCode != null && statusCode != 200) {
-            if (statusCode == 401) {
-                return ResponseEntity.status(401).body(result);
-            } else if (statusCode == 403) {
-                return ResponseEntity.status(403).body(result);
-            } else if (statusCode == 404) {
-                return ResponseEntity.status(404).body(result);
-            } else {
-                return ResponseEntity.status(500).body(result);
-            }
-        }
-        
-        return ResponseEntity.ok(result);
+        return ResponseHelper.fromServiceResult(result);
     }
     
-    /**
-     * 获取许可证信息（简化接口，只需要hwid）
-     */
     @PostMapping("/info")
     public ResponseEntity<?> info(@RequestBody Map<String, Object> request) {
         String hwid = (String) request.get("hwid");
@@ -118,34 +81,6 @@ public class LicenseController {
         }
         
         Map<String, Object> result = authorizationService.getLicenseInfoByHwid(hwid);
-        
-        Integer statusCode = (Integer) result.get("code");
-        if (statusCode != null && statusCode != 200) {
-            if (statusCode == 401) {
-                return ResponseEntity.status(401).body(result);
-            } else if (statusCode == 403) {
-                return ResponseEntity.status(403).body(result);
-            } else if (statusCode == 404) {
-                return ResponseEntity.status(404).body(result);
-            } else {
-                return ResponseEntity.status(500).body(result);
-            }
-        }
-        
-        return ResponseEntity.ok(result);
-    }
-    
-    private String getClientIpAddress(HttpServletRequest request) {
-        String xForwardedFor = request.getHeader("X-Forwarded-For");
-        if (xForwardedFor != null && !xForwardedFor.isEmpty() && !"unknown".equalsIgnoreCase(xForwardedFor)) {
-            return xForwardedFor.split(",")[0];
-        }
-        
-        String xRealIp = request.getHeader("X-Real-IP");
-        if (xRealIp != null && !xRealIp.isEmpty() && !"unknown".equalsIgnoreCase(xRealIp)) {
-            return xRealIp;
-        }
-        
-        return request.getRemoteAddr();
+        return ResponseHelper.fromServiceResult(result);
     }
 }

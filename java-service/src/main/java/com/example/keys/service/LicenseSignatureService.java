@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +20,7 @@ import java.util.Map;
 
 @Service
 public class LicenseSignatureService {
+    private static final Logger log = LoggerFactory.getLogger(LicenseSignatureService.class);
     
     @Value("${app.license.private-key:}")
     private String privateKeyBase64;
@@ -38,7 +41,7 @@ public class LicenseSignatureService {
             try {
                 loadKeysFromConfig();
             } catch (Exception e) {
-                System.err.println("Failed to load keys from config, generating new ones: " + e.getMessage());
+                log.warn("Failed to load keys from config, generating new ones: {}", e.getMessage());
                 generateNewKeyPair();
             }
         }
@@ -57,10 +60,9 @@ public class LicenseSignatureService {
             String privKeyB64 = Base64.getEncoder().encodeToString(privateKeyParams.getEncoded());
             String pubKeyB64 = Base64.getEncoder().encodeToString(publicKeyParams.getEncoded());
             
-            System.out.println("Generated new Ed25519 key pair:");
-            System.out.println("Private Key (add to application.properties): app.license.private-key=" + privKeyB64);
-            System.out.println("Public Key (add to application.properties): app.license.public-key=" + pubKeyB64);
-            System.out.println("Public Key (for client verification): " + pubKeyB64);
+            log.info("Generated new Ed25519 key pair");
+            log.info("Private Key (add to application.properties): app.license.private-key={}", privKeyB64);
+            log.info("Public Key (add to application.properties): app.license.public-key={}", pubKeyB64);
             
         } catch (Exception e) {
             throw new RuntimeException("Failed to generate Ed25519 key pair", e);
@@ -75,7 +77,7 @@ public class LicenseSignatureService {
             this.privateKey = new Ed25519PrivateKeyParameters(privateKeyBytes, 0);
             this.publicKey = new Ed25519PublicKeyParameters(publicKeyBytes, 0);
             
-            System.out.println("Loaded Ed25519 keys from configuration");
+            log.info("Loaded Ed25519 keys from configuration");
             
         } catch (Exception e) {
             throw new RuntimeException("Failed to load Ed25519 keys from configuration", e);
@@ -130,7 +132,7 @@ public class LicenseSignatureService {
             return verifier.verifySignature(signature);
             
         } catch (Exception e) {
-            System.err.println("License verification failed: " + e.getMessage());
+            log.warn("License verification failed: {}", e.getMessage());
             return false;
         }
     }

@@ -833,7 +833,7 @@ function sortSources(sortBy, sortOrder) {
 // 加载源码数据
 async function loadSources() {
     try {
-        const response = await fetch(`/api/sources?sortBy=${currentSortBy}&sortOrder=${currentSortOrder}`);
+        const response = await authFetch(`/api/sources?sortBy=${currentSortBy}&sortOrder=${currentSortOrder}&includeHidden=true`);
         const data = await response.json();
         
         const tbody = document.getElementById('sourcesTable');
@@ -843,8 +843,9 @@ async function loadSources() {
             data.data.forEach(source => {
                 const row = document.createElement('tr');
                 const thumbnailUrl = source.thumbnailUrl || (source.sha256 ? `/api/sources/by-sha/${source.sha256}/thumbnail` : '');
-                const downloadUrl = source.artifactUrl || `/d/${source.sha256}`;
+                const downloadUrl = `/api/d/${source.sha256}`;
                 const downloadCount = source.downloadCount || 0;
+                const isHidden = Number(source.isHidden || 0) !== 0;
                 
                 row.innerHTML = `
                     <td>
@@ -856,6 +857,9 @@ async function loadSources() {
                             <div class="source-name">${source.name}</div>
                             <div class="source-code">${source.codeName} v${source.version}</div>
                             <small class="text-muted">${source.description || ''}</small>
+                            <div class="mt-1">
+                                <span class="badge ${isHidden ? 'bg-warning text-dark' : 'bg-success'}">${isHidden ? '隐藏' : '公开'}</span>
+                            </div>
                         </div>
                     </td>
                     <td>
@@ -902,6 +906,9 @@ async function loadSources() {
 
 // 显示添加源码模态框
 function showAddSourceModal() {
+    const form = document.getElementById('addSourceForm');
+    form.reset();
+    toggleInstallCodeField('add');
     new bootstrap.Modal(document.getElementById('addSourceModal')).show();
 }
 
@@ -909,6 +916,14 @@ function showAddSourceModal() {
 async function addSource() {
     const form = document.getElementById('addSourceForm');
     const formData = new FormData(form);
+    const isHidden = document.getElementById('addIsHidden').checked;
+    const installCode = document.getElementById('addInstallCode').value.trim();
+    if (isHidden && !installCode) {
+        showAlert('隐藏源码必须设置安装码', 'warning');
+        return;
+    }
+    formData.set('isHidden', isHidden ? 'true' : 'false');
+    formData.set('installCode', installCode);
     
     try {
         const response = await fetch('/api/sources/upload', {
@@ -976,7 +991,7 @@ async function deleteSource(id) {
 // 编辑源码（打开更新模态框）
 async function editSource(id) {
     try {
-        const response = await fetch(`/api/sources/${id}`);
+        const response = await authFetch(`/api/sources/${id}`);
         const result = await response.json();
         
         if (result.success && result.data) {
@@ -992,6 +1007,9 @@ async function editSource(id) {
             document.getElementById('updateVersion').value = '';
             document.getElementById('updateSourceForm').reset();
             document.getElementById('updateSourceId').value = source.id;
+            document.getElementById('updateIsHidden').checked = Number(source.isHidden || 0) !== 0;
+            document.getElementById('updateInstallCode').value = source.installCode || '';
+            toggleInstallCodeField('update');
             
             // 保存源码信息供后续使用
             window.currentEditingSource = source;
@@ -1020,14 +1038,26 @@ async function updateSource() {
     // 检查是否有任何更新内容
     const hasFile = formData.get('package') && formData.get('package').size > 0;
     const hasThumbnail = formData.get('thumbnail') && formData.get('thumbnail').size > 0;
+    const hasLogo = formData.get('logo') && formData.get('logo').size > 0;
     const hasName = formData.get('name') && formData.get('name').trim();
     const hasDescription = formData.get('description') && formData.get('description').trim();
     const hasVersion = formData.get('version') && formData.get('version').trim();
+    const isHidden = document.getElementById('updateIsHidden').checked;
+    const installCode = document.getElementById('updateInstallCode').value.trim();
+    if (isHidden && !installCode) {
+        showAlert('隐藏源码必须设置安装码', 'warning');
+        return;
+    }
+    const currentHidden = window.currentEditingSource ? Number(window.currentEditingSource.isHidden || 0) !== 0 : false;
+    const currentInstallCode = window.currentEditingSource ? (window.currentEditingSource.installCode || '') : '';
+    const hasVisibilityChange = isHidden !== currentHidden || installCode !== currentInstallCode;
     
-    if (!hasFile && !hasThumbnail && !hasName && !hasDescription) {
+    if (!hasFile && !hasThumbnail && !hasLogo && !hasName && !hasDescription && !hasVersion && !hasVisibilityChange) {
         showAlert('请至少选择一项要更新的内容', 'warning');
         return;
     }
+    formData.set('isHidden', isHidden ? 'true' : 'false');
+    formData.set('installCode', installCode);
     
     try {
         // 显示加载状态
@@ -1057,6 +1087,9 @@ async function updateSource() {
             if (result.metaUpdated) {
                 message += ' (信息已更新)';
             }
+            if (result.visibilityUpdated) {
+                message += ' (可见性已更新)';
+            }
             
             showAlert(message, 'success');
             bootstrap.Modal.getInstance(document.getElementById('updateSourceModal')).hide();
@@ -1074,7 +1107,7 @@ async function updateSource() {
 // 查看版本历史
 async function viewVersionHistory(codeName) {
     try {
-        const response = await fetch(`/api/sources/versions/${codeName}`);
+        const response = await authFetch(`/api/sources/versions/${codeName}`);
         const result = await response.json();
         
         if (result.success && result.data) {
@@ -1089,7 +1122,7 @@ async function viewVersionHistory(codeName) {
                     <td>${formatFileSize(version.fileSize)}</td>
                     <td>${formatDateTime(version.uploadTime)}</td>
                     <td>
-                        <button class="btn btn-sm btn-success" onclick="window.open('/d/${version.sha256}')" title="下载此版本">
+                        <button class="btn btn-sm btn-success" onclick="window.open('/api/d/${version.sha256}')" title="下载此版本">
                             <i class="bi bi-download"></i>
                         </button>
                     </td>
@@ -1106,6 +1139,15 @@ async function viewVersionHistory(codeName) {
         console.error('获取版本历史失败:', error);
         showAlert('获取版本历史失败', 'danger');
     }
+}
+
+function toggleInstallCodeField(prefix) {
+    const checkbox = document.getElementById(`${prefix}IsHidden`);
+    const group = document.getElementById(`${prefix}InstallCodeGroup`);
+    const input = document.getElementById(`${prefix}InstallCode`);
+    const visible = checkbox && checkbox.checked;
+    if (group) group.style.display = visible ? 'block' : 'none';
+    if (input) input.required = !!visible;
 }
 
 // 查看源码下载统计

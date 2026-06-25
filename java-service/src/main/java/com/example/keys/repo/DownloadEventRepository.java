@@ -117,7 +117,7 @@ public class DownloadEventRepository {
         String sql = "SELECT COUNT(*) FROM download_events WHERE license_id = ? AND ok = TRUE AND deducted = TRUE";
         return jdbcTemplate.queryForObject(sql, Long.class, licenseId);
     }
-    
+
     public Long countTotalDownloadsToday() {
         String sql = "SELECT COUNT(*) FROM download_events WHERE DATE(created_at) = DATE('now') AND ok = TRUE AND deducted = TRUE";
         return jdbcTemplate.queryForObject(sql, Long.class);

@@ -423,6 +423,14 @@
                             <label class="form-label">描述</label>
                             <textarea class="form-control" name="description" rows="2"></textarea>
                         </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" name="isHidden" id="addIsHidden" value="true" onchange="toggleInstallCodeField('add')">
+                            <label class="form-check-label" for="addIsHidden">隐藏源码</label>
+                        </div>
+                        <div class="mb-3" id="addInstallCodeGroup" style="display: none;">
+                            <label class="form-label">安装码</label>
+                            <input type="text" class="form-control" name="installCode" id="addInstallCode" placeholder="如: shop">
+                        </div>
                         <div class="mb-3">
                             <label class="form-label">源码文件 (ZIP)</label>
                             <input type="file" class="form-control" name="package" accept=".zip" required>
@@ -484,6 +492,14 @@
                             <label class="form-label">新Logo <small class="text-muted">(可选，品牌小图标)</small></label>
                             <input type="file" class="form-control" name="logo" accept="image/*">
                         </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" name="isHidden" id="updateIsHidden" value="true" onchange="toggleInstallCodeField('update')">
+                            <label class="form-check-label" for="updateIsHidden">隐藏源码</label>
+                        </div>
+                        <div class="mb-3" id="updateInstallCodeGroup" style="display: none;">
+                            <label class="form-label">安装码</label>
+                            <input type="text" class="form-control" name="installCode" id="updateInstallCode" placeholder="如: shop">
+                        </div>
                         <div class="mb-3">
                             <label class="form-label">更新名称 <small class="text-muted">(可选)</small></label>
                             <input type="text" class="form-control" name="name" placeholder="留空保持不变">
@@ -539,4 +555,3 @@
     <script src="admin.js"></script>
 </body>
 </html>
-

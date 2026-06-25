@@ -1,5 +1,7 @@
 package com.example.keys;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -7,11 +9,11 @@ import org.springframework.context.annotation.Bean;
 
 import javax.sql.DataSource;
 import java.nio.file.Files;
-
 import java.nio.file.Paths;
 
 @SpringBootApplication
 public class KeysServiceApplication {
+    private static final Logger log = LoggerFactory.getLogger(KeysServiceApplication.class);
 
     public static void main(String[] args) {
         SpringApplication.run(KeysServiceApplication.class, args);
@@ -25,7 +27,6 @@ public class KeysServiceApplication {
                 st.execute("PRAGMA journal_mode=WAL");
                 st.execute("PRAGMA synchronous=NORMAL");
             }
-            // 目录：根据 OS 选择默认
             boolean isWin = System.getProperty("os.name").toLowerCase().startsWith("win");
             String cache = System.getProperty("SOURCE_CACHE_DIR",
                     isWin ? "D:/srv/source_cache" : "/srv/source_cache");
@@ -33,7 +34,7 @@ public class KeysServiceApplication {
                     isWin ? "D:/srv/releases_pool" : "/srv/releases_pool");
             Files.createDirectories(Paths.get(cache));
             Files.createDirectories(Paths.get(releases));
-            System.out.println("INFO:启动成功 访问localhost:3003");
+            log.info("启动成功，访问 http://localhost:3003");
         };
     }
 }

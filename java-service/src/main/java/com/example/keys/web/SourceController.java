@@ -6,15 +6,19 @@ import com.example.keys.service.StorageService;
 import com.example.keys.service.S3Service;
 import com.example.keys.service.ZipService;
 import com.example.keys.service.AuthorizationService;
+import com.example.keys.service.DownloadReceiptService;
 import com.example.keys.service.ServerManagementService;
 import com.example.keys.service.LicenseSignatureService;
+import com.example.keys.service.SourceAccessService;
 import org.springframework.http.MediaType;
-import org.springframework.http.HttpStatus;
 
 import org.springframework.util.StringUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import com.example.keys.util.IpUtils;
+import com.example.keys.util.VersionUtils;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -39,11 +43,15 @@ public class SourceController {
     private final AuthorizationService authorizationService;
     private final ServerManagementService serverManagementService;
     private final LicenseSignatureService licenseSignatureService;
+    private final SourceAccessService sourceAccessService;
+    private final DownloadReceiptService downloadReceiptService;
 
     public SourceController(SourcePackageRepository repo, StorageService storage, ZipService zip, 
                            S3Service s3, AuthorizationService authorizationService, 
                            ServerManagementService serverManagementService,
-                           LicenseSignatureService licenseSignatureService) {
+                           LicenseSignatureService licenseSignatureService,
+                           SourceAccessService sourceAccessService,
+                           DownloadReceiptService downloadReceiptService) {
         this.repo = repo; 
         this.storage = storage; 
         this.zip = zip; 
@@ -51,43 +59,79 @@ public class SourceController {
         this.authorizationService = authorizationService;
         this.serverManagementService = serverManagementService;
         this.licenseSignatureService = licenseSignatureService;
+        this.sourceAccessService = sourceAccessService;
+        this.downloadReceiptService = downloadReceiptService;
     }
 
     @GetMapping("/sources/by-sha/{sha256}/download")
-    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> downloadBySha(@PathVariable String sha256) throws Exception {
-        // 先根据数据库记录的 package_path 精确下载
+    public org.springframework.http.ResponseEntity<?> downloadBySha(@PathVariable String sha256,
+                                                                   @RequestParam(value = "license_payload", required = false) String licensePayload,
+                                                                   @RequestParam(value = "license_sig", required = false) String licenseSig,
+                                                                   @RequestParam(value = "hwid", required = false) String hwid,
+                                                                   HttpServletRequest request) throws Exception {
         var sp = repo.findBySha256(sha256);
+        if (sp == null) {
+            return org.springframework.http.ResponseEntity.status(404).body(Map.of("ok", false, "error", "源码文件不存在"));
+        }
+
+        Map<String, Object> accessResult = validateDownloadAccess(sp, licensePayload, licenseSig, hwid, request);
+        if (!(Boolean) accessResult.get("ok")) {
+            return org.springframework.http.ResponseEntity.status((Integer) accessResult.getOrDefault("code", 403)).body(accessResult);
+        }
+
+        return serveSourceFile(sp, accessResult, request, "by_sha_download");
+    }
+
+    private org.springframework.http.ResponseEntity<?> serveSourceFile(SourcePackage sp) throws Exception {
+        return serveSourceFile(sp, null, null, null);
+    }
+
+    private org.springframework.http.ResponseEntity<?> serveSourceFile(SourcePackage sp,
+                                                                      Map<String, Object> accessResult,
+                                                                      HttpServletRequest request,
+                                                                      String method) throws Exception {
+        java.nio.file.Path p = resolveSourceFilePath(sp);
+        if (p == null) {
+            return org.springframework.http.ResponseEntity.status(404).body(Map.of("ok", false, "error", "源码文件路径不存在"));
+        }
+
+        if (accessResult != null && request != null) {
+            Object token = accessResult.get("download_token");
+            if (token instanceof String downloadToken && StringUtils.hasText(downloadToken)) {
+                downloadReceiptService.submitReceipt(downloadToken, true, java.nio.file.Files.size(p),
+                        sp.getSha256(), IpUtils.getClientIpAddress(request), request.getHeader("User-Agent"), method);
+            }
+        }
+
+        String fname = p.getFileName().toString();
+        var res = new org.springframework.core.io.PathResource(p);
+        return org.springframework.http.ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=" + fname)
+                .contentLength(java.nio.file.Files.size(p))
+                .contentType(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM)
+                .body(res);
+    }
+
+    private java.nio.file.Path resolveSourceFilePath(SourcePackage sp) throws Exception {
+        // 先根据数据库记录的 package_path 精确下载
         if (sp != null && sp.getPackagePath() != null) {
             java.nio.file.Path p = java.nio.file.Path.of(sp.getPackagePath());
             if (!p.isAbsolute()) {
                 // 相对路径时相对于应用目录
                 p = java.nio.file.Paths.get(".").resolve(sp.getPackagePath()).normalize();
             }
-            if (java.nio.file.Files.exists(p)) {
-                String fname = p.getFileName().toString();
-                var res = new org.springframework.core.io.PathResource(p);
-                return org.springframework.http.ResponseEntity.ok()
-                        .header("Content-Disposition", "attachment; filename=" + fname)
-                        .contentLength(java.nio.file.Files.size(p))
-                        .contentType(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM)
-                        .body(res);
-            }
+            if (java.nio.file.Files.exists(p)) return p;
         }
         // 回退到分桶目录的通用命名
         String[] names = new String[]{"artifact.zip", "artifact.tgz", "artifact.tar.gz", "artifact.tar", "artifact.gz"};
-        java.nio.file.Path bucket = storage.bucketize(sha256);
+        java.nio.file.Path bucket = storage.bucketize(sp.getSha256());
         for (String n : names) {
             java.nio.file.Path p = bucket.resolve(n);
             if (java.nio.file.Files.exists(p)) {
-                var res = new org.springframework.core.io.PathResource(p);
-                return org.springframework.http.ResponseEntity.ok()
-                        .header("Content-Disposition", "attachment; filename=" + n)
-                        .contentLength(java.nio.file.Files.size(p))
-                        .contentType(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM)
-                        .body(res);
+                return p;
             }
         }
-        return org.springframework.http.ResponseEntity.notFound().build();
+        return null;
     }
 
     // 短链接形式：/d/{sha256} - 需要授权
@@ -98,27 +142,19 @@ public class SourceController {
                                                                    @RequestParam(value = "license_sig", required = false) String licenseSig,
                                                                    @RequestParam(value = "hwid", required = false) String hwid,
                                                                    HttpServletRequest request) throws Exception {
-        
-        // 验证授权参数
-        if (licensePayload == null || licenseSig == null || hwid == null) {
-            return org.springframework.http.ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .body(Map.of("error", "需要授权参数：license_payload, license_sig, hwid"));
+        var sp = repo.findBySha256(sha256);
+        if (sp == null) {
+            return org.springframework.http.ResponseEntity.status(404).body(Map.of("ok", false, "error", "源码文件不存在"));
         }
-        
-        // 验证许可证和服务器IP绑定
-        String serverIp = getClientIpAddress(request);
-        Map<String, Object> authResult = validateLicenseAndServerBinding(licensePayload, licenseSig, hwid, serverIp);
-        
-        if (!(Boolean) authResult.get("ok")) {
-            return org.springframework.http.ResponseEntity.status((Integer) authResult.getOrDefault("code", 403))
-                .body(authResult);
+
+        Map<String, Object> accessResult = validateDownloadAccess(sp, licensePayload, licenseSig, hwid, request);
+        if (!(Boolean) accessResult.get("ok")) {
+            return org.springframework.http.ResponseEntity.status((Integer) accessResult.getOrDefault("code", 403)).body(accessResult);
         }
-        
-        // 授权验证通过，执行下载
-        return downloadBySha(sha256);
+
+        return serveSourceFile(sp, accessResult, request, "short_download");
     }
 
-    // 按代码名与版本下载（外部可CORS使用）- 需要授权
     @GetMapping("/download")
     public org.springframework.http.ResponseEntity<?> downloadByCode(@RequestParam("code") String codeName,
                                                                      @RequestParam(value = "version", required = false) String version,
@@ -126,35 +162,35 @@ public class SourceController {
                                                                      @RequestParam(value = "license_sig", required = false) String licenseSig,
                                                                      @RequestParam(value = "hwid", required = false) String hwid,
                                                                      HttpServletRequest request) throws Exception {
-        
-        // 验证授权参数
-        if (licensePayload == null || licenseSig == null || hwid == null) {
-            return org.springframework.http.ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .body(Map.of("error", "需要授权参数：license_payload, license_sig, hwid"));
-        }
-        
-        // 验证许可证和服务器IP绑定
-        String serverIp = getClientIpAddress(request);
-        Map<String, Object> authResult = validateLicenseAndServerBinding(licensePayload, licenseSig, hwid, serverIp);
-        
-        if (!(Boolean) authResult.get("ok")) {
-            return org.springframework.http.ResponseEntity.status((Integer) authResult.getOrDefault("code", 403))
-                .body(authResult);
-        }
-        
         // 查找源码包
         SourcePackage sp = (version == null || version.isBlank()) ? repo.findLatestByCodeName(codeName) : repo.findByCodeAndVersion(codeName, version);
         if (sp == null) return org.springframework.http.ResponseEntity.status(404).body(Map.of("error","not found"));
         
-        // 如果有S3直链，重定向到S3（302）；否则返回本地下载流
-        if (sp.getArtifactUrl() != null && !sp.getArtifactUrl().isBlank()) {
+        Map<String, Object> accessResult = validateDownloadAccess(sp, licensePayload, licenseSig, hwid, request);
+        if (!(Boolean) accessResult.get("ok")) {
+            return org.springframework.http.ResponseEntity.status((Integer) accessResult.getOrDefault("code", 403)).body(accessResult);
+        }
+
+        // 隐藏源码不能跳转到外部 artifactUrl，必须走本服务授权链路。
+        if (!sp.isHiddenEnabled() && sp.getArtifactUrl() != null && !sp.getArtifactUrl().isBlank()) {
+            Object token = accessResult.get("download_token");
+            if (token instanceof String downloadToken && StringUtils.hasText(downloadToken)) {
+                downloadReceiptService.submitReceipt(downloadToken, true,
+                        sp.getFileSize() != null ? sp.getFileSize() : 0L,
+                        sp.getSha256(), IpUtils.getClientIpAddress(request), request.getHeader("User-Agent"), "code_s3_redirect");
+            }
             return org.springframework.http.ResponseEntity.status(302).header("Location", sp.getArtifactUrl()).build();
         }
-        return downloadBySha(sp.getSha256());
+        return serveSourceFile(sp, accessResult, request, "code_download");
     }
 
     @GetMapping("/sources/by-sha/{sha256}/thumbnail")
-    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> thumbnailBySha(@PathVariable String sha256) throws Exception {
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> thumbnailBySha(@PathVariable String sha256,
+                                                                                                      HttpServletRequest request) throws Exception {
+        var source = repo.findBySha256(sha256);
+        if (source != null && source.isHiddenEnabled() && !sourceAccessService.isAdminRequest(request)) {
+            return org.springframework.http.ResponseEntity.notFound().build();
+        }
         java.nio.file.Path bucket = storage.bucketize(sha256);
         String[] names = new String[]{"thumbnail.png", "thumbnail.jpg", "thumbnail.jpeg", "thumbnail.webp"};
         for (String n : names) {
@@ -170,7 +206,12 @@ public class SourceController {
     }
 
     @GetMapping("/sources/by-sha/{sha256}/logo")
-    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> logoBySha(@PathVariable String sha256) throws Exception {
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> logoBySha(@PathVariable String sha256,
+                                                                                                  HttpServletRequest request) throws Exception {
+        var source = repo.findBySha256(sha256);
+        if (source != null && source.isHiddenEnabled() && !sourceAccessService.isAdminRequest(request)) {
+            return org.springframework.http.ResponseEntity.notFound().build();
+        }
         java.nio.file.Path bucket = storage.bucketize(sha256);
         String[] names = new String[]{"logo.png", "logo.jpg", "logo.jpeg", "logo.webp"};
         for (String n : names) {
@@ -186,20 +227,59 @@ public class SourceController {
     }
 
     @GetMapping("/sources")
-    public Map<String, Object> list(@RequestParam(value = "q", required = false) String q,
-                                    @RequestParam(value = "sortBy", defaultValue = "update_time") String sortBy,
-                                    @RequestParam(value = "sortOrder", defaultValue = "desc") String sortOrder) {
-        List<SourcePackage> data = repo.findAll(q, sortBy, sortOrder);
+    public org.springframework.http.ResponseEntity<?> list(@RequestParam(value = "q", required = false) String q,
+                                                          @RequestParam(value = "sortBy", defaultValue = "update_time") String sortBy,
+                                                          @RequestParam(value = "sortOrder", defaultValue = "desc") String sortOrder,
+                                                          @RequestParam(value = "includeHidden", defaultValue = "false") boolean includeHidden,
+                                                          HttpServletRequest request) {
+        if (includeHidden && !sourceAccessService.isAdminRequest(request)) {
+            return org.springframework.http.ResponseEntity.status(401).body(Map.of("success", false, "error", "未登录"));
+        }
+        List<SourcePackage> data = includeHidden ? repo.findAllIncludingHidden(q, sortBy, sortOrder) : repo.findAll(q, sortBy, sortOrder);
         Map<String, Object> resp = new HashMap<>();
-        resp.put("success", true); resp.put("data", data); return resp;
+        resp.put("success", true); resp.put("data", data); return org.springframework.http.ResponseEntity.ok(resp);
+    }
+
+    @GetMapping("/sources/hidden/resolve")
+    public org.springframework.http.ResponseEntity<?> resolveHiddenSource(@RequestParam(value = "installCode", required = false) String installCode,
+                                                                         @RequestParam(value = "install_code", required = false) String installCodeSnake) {
+        String code = StringUtils.hasText(installCode) ? installCode.trim() : installCodeSnake;
+        if (!StringUtils.hasText(code)) {
+            return org.springframework.http.ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "error", "缺少下载码"));
+        }
+
+        SourcePackage sp = repo.findHiddenByInstallCode(code.trim());
+        if (sp == null) {
+            return org.springframework.http.ResponseEntity.status(404)
+                    .body(Map.of("success", false, "error", "下载码无效或源码不存在"));
+        }
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("id", sp.getId());
+        data.put("name", sp.getName());
+        data.put("codeName", sp.getCodeName());
+        data.put("version", sp.getVersion());
+        data.put("description", sp.getDescription());
+        data.put("country", sp.getCountry());
+        data.put("website", sp.getWebsite());
+        data.put("sha256", sp.getSha256());
+        data.put("fileSize", sp.getFileSize());
+        data.put("uploadTime", sp.getUploadTime());
+        data.put("updateTime", sp.getUpdateTime());
+
+        return org.springframework.http.ResponseEntity.ok(Map.of("success", true, "data", data));
     }
 
     @GetMapping("/sources/{id}")
-    public Map<String, Object> get(@PathVariable String id) {
+    public org.springframework.http.ResponseEntity<?> get(@PathVariable String id, HttpServletRequest request) {
         SourcePackage sp = repo.findById(id);
         Map<String, Object> resp = new HashMap<>();
-        if (sp == null) { resp.put("error", "not found"); return resp; }
-        resp.put("success", true); resp.put("data", sp); return resp;
+        if (sp == null || (sp.isHiddenEnabled() && !sourceAccessService.isAdminRequest(request))) {
+            resp.put("error", "not found");
+            return org.springframework.http.ResponseEntity.status(404).body(resp);
+        }
+        resp.put("success", true); resp.put("data", sp); return org.springframework.http.ResponseEntity.ok(resp);
     }
 
     @PostMapping(value = "/sources/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -210,6 +290,8 @@ public class SourceController {
                                       @RequestParam(required = false) String description,
                                       @RequestParam(required = false) String country,
                                       @RequestParam(required = false) String website,
+                                      @RequestParam(value = "isHidden", required = false) String isHiddenParam,
+                                      @RequestParam(value = "installCode", required = false) String installCode,
                                       @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail,
                                       @RequestParam(value = "logo", required = false) MultipartFile logo,
                                       @RequestParam(value = "preview", required = false) MultipartFile preview) throws Exception {
@@ -218,13 +300,27 @@ public class SourceController {
         // 去重：如已存在相同sha256的包，直接返回已有记录信息
         var existing = repo.findBySha256(info.sha256());
         if (existing != null) {
+            boolean visibilityProvided = isHiddenParam != null || StringUtils.hasText(installCode);
+            boolean hidden = visibilityProvided ? parseBooleanParam(isHiddenParam) : existing.isHiddenEnabled();
+            String finalInstallCode = StringUtils.hasText(installCode) ? installCode.trim() : existing.getInstallCode();
+            if (hidden && !StringUtils.hasText(finalInstallCode)) {
+                return Map.of("success", false, "error", "隐藏源码必须设置安装码");
+            }
+            if (visibilityProvided) {
+                repo.updateVisibilityForCodeName(existing.getCodeName(), hidden, finalInstallCode);
+                if (hidden) {
+                    removeArtifactObjectsForCodeName(existing.getCodeName());
+                }
+                existing.setIsHidden(hidden ? 1 : 0);
+                existing.setInstallCode(hidden ? finalInstallCode : null);
+            }
             Map<String,Object> resp = new HashMap<>();
             resp.put("success", true);
             resp.put("dedup", true);
             resp.put("message", "该文件已存在，直接复用");
             resp.put("id", existing.getId());
             resp.put("sha256", existing.getSha256());
-            if (existing.getArtifactUrl() != null) resp.put("artifactUrl", existing.getArtifactUrl());
+            if (!existing.isHiddenEnabled() && existing.getArtifactUrl() != null) resp.put("artifactUrl", existing.getArtifactUrl());
             if (existing.getThumbnailUrl() != null) resp.put("thumbnailUrl", existing.getThumbnailUrl());
             return resp;
         }
@@ -237,6 +333,15 @@ public class SourceController {
         sp.setPackageExt(info.ext());
         sp.setPackagePath(info.finalPath().toString());
         sp.setFileSize(info.size()); sp.setStatus("uploaded");
+        var latestSameCode = repo.findLatestByCodeName(codeName);
+        boolean visibilityProvided = isHiddenParam != null || StringUtils.hasText(installCode);
+        boolean hidden = visibilityProvided ? parseBooleanParam(isHiddenParam) : latestSameCode != null && latestSameCode.isHiddenEnabled();
+        String finalInstallCode = StringUtils.hasText(installCode) ? installCode.trim() : (latestSameCode != null ? latestSameCode.getInstallCode() : null);
+        if (hidden && !StringUtils.hasText(finalInstallCode)) {
+            return Map.of("success", false, "error", "隐藏源码必须设置安装码");
+        }
+        sp.setIsHidden(hidden ? 1 : 0);
+        sp.setInstallCode(hidden ? finalInstallCode : null);
         if (thumbnail != null && !thumbnail.isEmpty()) {
             var t = storage.saveThumbnail(thumbnail.getInputStream(), thumbnail.getOriginalFilename(), bucketDir);
             sp.setThumbnailPath(t.toString());
@@ -251,10 +356,12 @@ public class SourceController {
         }
         // 可选：同步上传到S3（artifact）
         if (s3.isEnabled()) {
+            if (!hidden) {
             try (var in = java.nio.file.Files.newInputStream(info.finalPath())) {
                 String key = sp.getSha256() + "/artifact" + sp.getPackageExt();
                 String url = s3.putObject(key, in, sp.getFileSize(), "application/octet-stream");
                 sp.setArtifactUrl(url);
+            }
             }
             // 缩略图
             if (sp.getThumbnailPath() != null) {
@@ -288,9 +395,15 @@ public class SourceController {
             }
         }
         repo.insert(sp);
+        if (visibilityProvided) {
+            repo.updateVisibilityForCodeName(codeName, hidden, finalInstallCode);
+            if (hidden) {
+                removeArtifactObjectsForCodeName(codeName);
+            }
+        }
         Map<String,Object> resp = new HashMap<>();
         resp.put("success", true); resp.put("id", sp.getId()); resp.put("sha256", sp.getSha256());
-        if (sp.getArtifactUrl() != null) resp.put("artifactUrl", sp.getArtifactUrl());
+        if (!sp.isHiddenEnabled() && sp.getArtifactUrl() != null) resp.put("artifactUrl", sp.getArtifactUrl());
         if (sp.getThumbnailUrl() != null) resp.put("thumbnailUrl", sp.getThumbnailUrl());
         return resp;
         } catch (Exception e) {
@@ -323,7 +436,29 @@ public class SourceController {
         sp.setPackageExt(info.ext());
         sp.setPackagePath(info.finalPath().toString());
         sp.setFileSize(info.size()); sp.setStatus("uploaded");
+        var latestSameCode = repo.findLatestByCodeName(codeName);
+        boolean visibilityProvided = body.containsKey("isHidden") || body.containsKey("installCode") || body.containsKey("install_code");
+        boolean hidden = parseBooleanParam(body.get("isHidden"));
+        String installCode = body.get("installCode");
+        if (!StringUtils.hasText(installCode)) {
+            installCode = body.get("install_code");
+        }
+        if (!StringUtils.hasText(body.get("isHidden")) && latestSameCode != null) {
+            hidden = latestSameCode.isHiddenEnabled();
+            installCode = latestSameCode.getInstallCode();
+        }
+        if (hidden && !StringUtils.hasText(installCode)) {
+            return Map.of("success", false, "error", "隐藏源码必须设置安装码");
+        }
+        sp.setIsHidden(hidden ? 1 : 0);
+        sp.setInstallCode(hidden ? installCode.trim() : null);
         repo.insert(sp);
+        if (visibilityProvided) {
+            repo.updateVisibilityForCodeName(codeName, hidden, hidden ? installCode.trim() : null);
+            if (hidden) {
+                removeArtifactObjectsForCodeName(codeName);
+            }
+        }
         return Map.of("success", true, "id", sp.getId(), "sha256", sp.getSha256());
     }
 
@@ -464,14 +599,21 @@ public class SourceController {
         var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
         var bucketDir = storage.bucketize(info.sha256());
         String artifactUrl = null;
-        if (s3.isEnabled()) {
+        if (s3.isEnabled() && !sp.isHiddenEnabled()) {
             try (var in = java.nio.file.Files.newInputStream(info.finalPath())) {
                 String key = info.sha256() + "/artifact" + info.ext();
                 artifactUrl = s3.putObject(key, in, info.size(), "application/octet-stream");
             }
         }
         repo.replacePackage(id, version, info.sha256(), bucketDir.toString(), info.ext(), info.finalPath().toString(), artifactUrl, info.size());
-        return Map.of("success", true, "version", version, "sha256", info.sha256(), "artifactUrl", artifactUrl);
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("version", version);
+        result.put("sha256", info.sha256());
+        if (!sp.isHiddenEnabled() && artifactUrl != null) {
+            result.put("artifactUrl", artifactUrl);
+        }
+        return result;
     }
 
     /**
@@ -487,7 +629,9 @@ public class SourceController {
                                                    @RequestParam(value = "name", required = false) String name,
                                                    @RequestParam(value = "description", required = false) String description,
                                                    @RequestParam(value = "country", required = false) String country,
-                                                   @RequestParam(value = "website", required = false) String website) throws Exception {
+                                                   @RequestParam(value = "website", required = false) String website,
+                                                   @RequestParam(value = "isHidden", required = false) String isHiddenParam,
+                                                   @RequestParam(value = "installCode", required = false) String installCode) throws Exception {
         try {
             var sp = repo.findById(id);
             if (sp == null) {
@@ -508,6 +652,21 @@ public class SourceController {
             if (name != null || description != null || country != null || website != null) {
                 repo.updateMeta(id, finalName, sp.getCodeName(), finalDesc, finalCountry, finalWebsite);
                 result.put("metaUpdated", true);
+            }
+
+            if (isHiddenParam != null || installCode != null) {
+                boolean hidden = isHiddenParam != null ? parseBooleanParam(isHiddenParam) : sp.isHiddenEnabled();
+                String finalInstallCode = StringUtils.hasText(installCode) ? installCode.trim() : sp.getInstallCode();
+                if (hidden && !StringUtils.hasText(finalInstallCode)) {
+                    return Map.of("success", false, "error", "隐藏源码必须设置安装码");
+                }
+                repo.updateVisibilityForCodeName(sp.getCodeName(), hidden, finalInstallCode);
+                if (hidden) {
+                    removeArtifactObjectsForCodeName(sp.getCodeName());
+                }
+                sp.setIsHidden(hidden ? 1 : 0);
+                sp.setInstallCode(hidden ? finalInstallCode : null);
+                result.put("visibilityUpdated", true);
             }
             
             // 更新版本号（如果提供了新版本）
@@ -564,7 +723,7 @@ public class SourceController {
                 
                 // 自动递增版本号（如果没有手动指定新版本）
                 if (version == null || version.trim().isEmpty()) {
-                    finalVersion = incrementVersion(sp.getVersion());
+                    finalVersion = VersionUtils.increment(sp.getVersion());
                     result.put("versionAutoIncremented", true);
                 }
                 result.put("oldVersion", sp.getVersion());
@@ -608,14 +767,24 @@ public class SourceController {
                     }
                 }
                 
-                // 删除旧的源码文件（不删除缩略图和logo，可能已被复制）
+                // 删除旧的源码文件；如果新旧 SHA 相同，saveAndHash 会复用同一个 artifact，不能删。
                 if (sp.getPackagePath() != null) {
-                    try { java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(sp.getPackagePath())); } catch (Exception e) {}
+                    try {
+                        java.nio.file.Path oldPackagePath = java.nio.file.Path.of(sp.getPackagePath()).toAbsolutePath().normalize();
+                        java.nio.file.Path newPackagePath = info.finalPath().toAbsolutePath().normalize();
+                        if (!oldPackagePath.equals(newPackagePath)) {
+                            java.nio.file.Files.deleteIfExists(oldPackagePath);
+                        }
+                    } catch (Exception e) {}
+                }
+
+                if (!java.nio.file.Files.exists(info.finalPath())) {
+                    return Map.of("success", false, "error", "源码包保存失败，文件未落盘");
                 }
                 
                 // 上传到S3
                 String artifactUrl = null;
-                if (s3.isEnabled()) {
+                if (s3.isEnabled() && !sp.isHiddenEnabled()) {
                     try (var in = java.nio.file.Files.newInputStream(info.finalPath())) {
                         String key = info.sha256() + "/artifact" + info.ext();
                         artifactUrl = s3.putObject(key, in, info.size(), "application/octet-stream");
@@ -638,7 +807,7 @@ public class SourceController {
                 result.put("oldSha256", oldSha256);
                 result.put("newSha256", info.sha256());
                 result.put("fileSize", info.size());
-                if (artifactUrl != null) result.put("artifactUrl", artifactUrl);
+                if (!sp.isHiddenEnabled() && artifactUrl != null) result.put("artifactUrl", artifactUrl);
             }
             
             result.put("version", finalVersion);
@@ -714,13 +883,17 @@ public class SourceController {
             sp.setLogoUrl(latestSp.getLogoUrl());
             sp.setPreviewPath(latestSp.getPreviewPath());
             sp.setPreviewUrl(latestSp.getPreviewUrl());
+            sp.setIsHidden(latestSp.getIsHidden());
+            sp.setInstallCode(latestSp.isHiddenEnabled() ? latestSp.getInstallCode() : null);
             
             // 上传到S3
             if (s3.isEnabled()) {
+                if (!sp.isHiddenEnabled()) {
                 try (var in = java.nio.file.Files.newInputStream(info.finalPath())) {
                     String key = sp.getSha256() + "/artifact" + sp.getPackageExt();
                     String url = s3.putObject(key, in, sp.getFileSize(), "application/octet-stream");
                     sp.setArtifactUrl(url);
+                }
                 }
                 
                 if (thumbnail != null && !thumbnail.isEmpty() && sp.getThumbnailPath() != null) {
@@ -743,7 +916,7 @@ public class SourceController {
             result.put("version", version);
             result.put("sha256", sp.getSha256());
             result.put("fileSize", sp.getFileSize());
-            if (sp.getArtifactUrl() != null) result.put("artifactUrl", sp.getArtifactUrl());
+            if (!sp.isHiddenEnabled() && sp.getArtifactUrl() != null) result.put("artifactUrl", sp.getArtifactUrl());
             if (sp.getThumbnailUrl() != null) result.put("thumbnailUrl", sp.getThumbnailUrl());
             
             return result;
@@ -757,12 +930,16 @@ public class SourceController {
      * 获取源码包的所有版本
      */
     @GetMapping("/sources/versions/{codeName}")
-    public Map<String, Object> getVersionsByCodeName(@PathVariable String codeName) {
+    public org.springframework.http.ResponseEntity<?> getVersionsByCodeName(@PathVariable String codeName,
+                                                                           HttpServletRequest request) {
         List<SourcePackage> versions = repo.findAllByCodeName(codeName);
         if (versions == null || versions.isEmpty()) {
-            return Map.of("success", false, "error", "未找到代码名为 " + codeName + " 的源码包");
+            return org.springframework.http.ResponseEntity.status(404).body(Map.of("success", false, "error", "未找到代码名为 " + codeName + " 的源码包"));
         }
-        return Map.of("success", true, "data", versions, "count", versions.size());
+        if (versions.get(0).isHiddenEnabled() && !sourceAccessService.isAdminRequest(request)) {
+            return org.springframework.http.ResponseEntity.status(404).body(Map.of("success", false, "error", "未找到代码名为 " + codeName + " 的源码包"));
+        }
+        return org.springframework.http.ResponseEntity.ok(Map.of("success", true, "data", versions, "count", versions.size()));
     }
     
     /**
@@ -770,21 +947,63 @@ public class SourceController {
      * 根据 codeName 和当前版本号检查是否有更新
      */
     @GetMapping("/sources/check-update")
-    public Map<String, Object> checkUpdate(@RequestParam String codeName, 
-                                           @RequestParam String currentVersion) {
+    public org.springframework.http.ResponseEntity<?> checkUpdate(@RequestParam String codeName,
+                                           @RequestParam String currentVersion,
+                                           @RequestParam(value = "license_payload", required = false) String licensePayload,
+                                           @RequestParam(value = "license_sig", required = false) String licenseSig,
+                                           @RequestParam(value = "hwid", required = false) String hwid,
+                                           HttpServletRequest request) {
+        return checkUpdateInternal(codeName, currentVersion, licensePayload, licenseSig, hwid, request);
+    }
+
+    @PostMapping("/sources/check-update")
+    public org.springframework.http.ResponseEntity<?> checkUpdatePost(@RequestBody Map<String, Object> body,
+                                                                     HttpServletRequest request) {
+        String codeName = body.get("codeName") instanceof String v ? v : null;
+        String currentVersion = body.get("currentVersion") instanceof String v ? v : null;
+        @SuppressWarnings("unchecked")
+        Map<String, Object> license = body.get("license") instanceof Map<?, ?> m ? (Map<String, Object>) m : null;
+        String licensePayload = license != null && license.get("payload") instanceof String v ? v : null;
+        String licenseSig = license != null && license.get("sig") instanceof String v ? v : null;
+        String hwid = body.get("hwid") instanceof String v ? v : null;
+        return checkUpdateInternal(codeName, currentVersion, licensePayload, licenseSig, hwid, request);
+    }
+
+    private org.springframework.http.ResponseEntity<?> checkUpdateInternal(String codeName,
+                                                                          String currentVersion,
+                                                                          String licensePayload,
+                                                                          String licenseSig,
+                                                                          String hwid,
+                                                                          HttpServletRequest request) {
         try {
+            if (!StringUtils.hasText(codeName) || !StringUtils.hasText(currentVersion)) {
+                return org.springframework.http.ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "hasUpdate", false,
+                    "error", "缺少必要参数：codeName 和 currentVersion"
+                ));
+            }
             SourcePackage latest = repo.findLatestByCodeName(codeName);
             
             if (latest == null) {
-                return Map.of(
+                return org.springframework.http.ResponseEntity.status(404).body(Map.of(
                     "success", false, 
                     "hasUpdate", false,
                     "error", "未找到代码名为 " + codeName + " 的源码包"
-                );
+                ));
+            }
+
+            if (latest.isHiddenEnabled()) {
+                String finalPayload = resolveAuthValue(request, licensePayload, "X-License-Payload", "license_payload");
+                String finalSig = resolveAuthValue(request, licenseSig, "X-License-Sig", "license_sig");
+                String finalHwid = resolveAuthValue(request, hwid, "X-HWID", "hwid");
+                Map<String, Object> authResult = validateLicenseAndServerBinding(finalPayload, finalSig, finalHwid, IpUtils.getClientIpAddress(request));
+                if (!(Boolean) authResult.get("ok")) {
+                    return org.springframework.http.ResponseEntity.status((Integer) authResult.getOrDefault("code", 403)).body(new HashMap<>(authResult));
+                }
             }
             
-            // 比较版本号
-            boolean hasUpdate = compareVersions(latest.getVersion(), currentVersion) > 0;
+            boolean hasUpdate = VersionUtils.compare(latest.getVersion(), currentVersion) > 0;
             
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
@@ -804,77 +1023,13 @@ public class SourceController {
                 result.put("latestThumbnailUrl", latest.getThumbnailUrl());
             }
             
-            return result;
+            return org.springframework.http.ResponseEntity.ok(result);
             
         } catch (Exception e) {
-            return Map.of("success", false, "error", "检查更新失败: " + e.getMessage());
+            return org.springframework.http.ResponseEntity.status(500).body(Map.of("success", false, "error", "检查更新失败: " + e.getMessage()));
         }
     }
     
-    /**
-     * 比较版本号 (返回 >0 表示 v1 > v2, <0 表示 v1 < v2, =0 表示相等)
-     */
-    private int compareVersions(String v1, String v2) {
-        if (v1 == null || v2 == null) return 0;
-        
-        // 去除 v 前缀
-        v1 = v1.toLowerCase().replace("v", "").trim();
-        v2 = v2.toLowerCase().replace("v", "").trim();
-        
-        String[] parts1 = v1.split("\\.");
-        String[] parts2 = v2.split("\\.");
-        
-        int maxLen = Math.max(parts1.length, parts2.length);
-        
-        for (int i = 0; i < maxLen; i++) {
-            int num1 = i < parts1.length ? parseVersionPart(parts1[i]) : 0;
-            int num2 = i < parts2.length ? parseVersionPart(parts2[i]) : 0;
-            
-            if (num1 != num2) {
-                return num1 - num2;
-            }
-        }
-        
-        return 0;
-    }
-    
-    /**
-     * 解析版本号部分
-     */
-    private int parseVersionPart(String part) {
-        try {
-            // 移除非数字后缀 (如 1.0.0-beta)
-            String numPart = part.replaceAll("[^0-9].*", "");
-            return numPart.isEmpty() ? 0 : Integer.parseInt(numPart);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
-    }
-    
-    /**
-     * 自动递增版本号
-     */
-    private String incrementVersion(String currentVersion) {
-        if (currentVersion == null || currentVersion.isEmpty()) {
-            return "1.0.1";
-        }
-        
-        try {
-            String[] parts = currentVersion.split("\\.");
-            if (parts.length >= 3) {
-                int patch = Integer.parseInt(parts[parts.length - 1]) + 1;
-                parts[parts.length - 1] = String.valueOf(patch);
-                return String.join(".", parts);
-            } else if (parts.length == 2) {
-                int minor = Integer.parseInt(parts[1]) + 1;
-                return parts[0] + "." + minor + ".0";
-            } else {
-                return currentVersion + ".1";
-            }
-        } catch (NumberFormatException e) {
-            return currentVersion + ".1";
-        }
-    }
 
     @GetMapping("/sources/{id}/verify")
     public Map<String, Object> verify(@PathVariable String id) throws Exception {
@@ -908,6 +1063,13 @@ public class SourceController {
      */
     private Map<String, Object> validateLicenseAndServerBinding(String licensePayload, String licenseSig, String hwid, String serverIp) {
         try {
+            if (!StringUtils.hasText(licensePayload) || !StringUtils.hasText(licenseSig) || !StringUtils.hasText(hwid)) {
+                return Map.of(
+                    "ok", false,
+                    "error", "需要有效授权参数：license_payload, license_sig, hwid",
+                    "code", 401
+                );
+            }
             // 1. 验证许可证状态
             Map<String, Object> statusResult = authorizationService.getLicenseStatus(licensePayload, licenseSig, hwid);
             if (!(Boolean) statusResult.get("ok")) {
@@ -942,23 +1104,57 @@ public class SourceController {
             );
         }
     }
-    
-    /**
-     * 获取客户端IP地址
-     */
-    private String getClientIpAddress(HttpServletRequest request) {
-        String xForwardedFor = request.getHeader("X-Forwarded-For");
-        if (xForwardedFor != null && !xForwardedFor.isEmpty() && !"unknown".equalsIgnoreCase(xForwardedFor)) {
-            return xForwardedFor.split(",")[0];
-        }
-        
-        String xRealIp = request.getHeader("X-Real-IP");
-        if (xRealIp != null && !xRealIp.isEmpty() && !"unknown".equalsIgnoreCase(xRealIp)) {
-            return xRealIp;
-        }
-        
-        return request.getRemoteAddr();
+
+    private Map<String, Object> validateDownloadAccess(SourcePackage sourcePackage,
+                                                       String licensePayload,
+                                                       String licenseSig,
+                                                       String hwid,
+                                                       HttpServletRequest request) {
+        String finalPayload = resolveAuthValue(request, licensePayload, "X-License-Payload", "license_payload");
+        String finalSig = resolveAuthValue(request, licenseSig, "X-License-Sig", "license_sig");
+        String finalHwid = resolveAuthValue(request, hwid, "X-HWID", "hwid");
+
+        return authorizationService.downloadPreauth(finalPayload, finalSig, finalHwid, sourcePackage.getSha256(),
+                Map.of("download_method", "direct_source_download"), IpUtils.getClientIpAddress(request),
+                sourceAccessService.extractInstallCode(request, null));
     }
+
+    private String resolveAuthValue(HttpServletRequest request, String explicitValue, String headerName, String parameterName) {
+        if (StringUtils.hasText(explicitValue)) {
+            return explicitValue.trim();
+        }
+        if (request == null) {
+            return null;
+        }
+        String header = request.getHeader(headerName);
+        if (StringUtils.hasText(header)) {
+            return header.trim();
+        }
+        String parameter = request.getParameter(parameterName);
+        return StringUtils.hasText(parameter) ? parameter.trim() : null;
+    }
+
+    private void removeArtifactObjectsForCodeName(String codeName) {
+        if (!s3.isEnabled() || !StringUtils.hasText(codeName)) {
+            return;
+        }
+        for (SourcePackage version : repo.findAllByCodeName(codeName)) {
+            if (!StringUtils.hasText(version.getSha256()) || !StringUtils.hasText(version.getPackageExt())) {
+                continue;
+            }
+            try {
+                s3.deleteObject(version.getSha256() + "/artifact" + version.getPackageExt());
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private boolean parseBooleanParam(String value) {
+        if (!StringUtils.hasText(value)) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase();
+        return normalized.equals("true") || normalized.equals("1") || normalized.equals("on") || normalized.equals("yes");
+    }
+
 }
-
-
