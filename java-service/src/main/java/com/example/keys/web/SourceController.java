@@ -188,7 +188,7 @@ public class SourceController {
     public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> thumbnailBySha(@PathVariable String sha256,
                                                                                                       HttpServletRequest request) throws Exception {
         var source = repo.findBySha256(sha256);
-        if (source != null && source.isHiddenEnabled() && !sourceAccessService.isAdminRequest(request)) {
+        if (!canReadSourceImage(source, request)) {
             return org.springframework.http.ResponseEntity.notFound().build();
         }
         java.nio.file.Path bucket = storage.bucketize(sha256);
@@ -209,7 +209,7 @@ public class SourceController {
     public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> logoBySha(@PathVariable String sha256,
                                                                                                   HttpServletRequest request) throws Exception {
         var source = repo.findBySha256(sha256);
-        if (source != null && source.isHiddenEnabled() && !sourceAccessService.isAdminRequest(request)) {
+        if (!canReadSourceImage(source, request)) {
             return org.springframework.http.ResponseEntity.notFound().build();
         }
         java.nio.file.Path bucket = storage.bucketize(sha256);
@@ -224,6 +224,18 @@ public class SourceController {
             }
         }
         return org.springframework.http.ResponseEntity.notFound().build();
+    }
+
+    private boolean canReadSourceImage(SourcePackage source, HttpServletRequest request) {
+        if (source == null || !source.isHiddenEnabled()) {
+            return true;
+        }
+        if (sourceAccessService.isAdminRequest(request)) {
+            return true;
+        }
+        String installCode = sourceAccessService.extractInstallCode(request, null);
+        Map<String, Object> accessResult = sourceAccessService.validateInstallCode(source, installCode);
+        return Boolean.TRUE.equals(accessResult.get("ok"));
     }
 
     @GetMapping("/sources")
