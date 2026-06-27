@@ -1,10 +1,13 @@
 package com.example.keys.repo;
 
 import com.example.keys.model.SourcePackage;
+import com.example.keys.util.VersionUtils;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 @Repository
@@ -157,9 +160,10 @@ public class SourcePackageRepository {
     }
 
     public SourcePackage findLatestByCodeName(String codeName) {
-        List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE code_name=? AND is_active=1 ORDER BY upload_time DESC LIMIT 1",
+        List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE code_name=? AND is_active=1",
                 new BeanPropertyRowMapper<>(SourcePackage.class), codeName);
-        return list.isEmpty() ? null : list.get(0);
+        List<SourcePackage> sorted = sortByVersionDesc(list);
+        return sorted.isEmpty() ? null : sorted.get(0);
     }
 
     /**
@@ -173,16 +177,27 @@ public class SourcePackageRepository {
     }
 
     public SourcePackage findHiddenByInstallCode(String installCode) {
-        List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE install_code=? AND COALESCE(is_hidden, 0)=1 AND is_active=1 ORDER BY upload_time DESC LIMIT 1",
+        List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE install_code=? AND COALESCE(is_hidden, 0)=1 AND is_active=1",
                 new BeanPropertyRowMapper<>(SourcePackage.class), installCode);
-        return list.isEmpty() ? null : list.get(0);
+        List<SourcePackage> sorted = sortByVersionDesc(list);
+        return sorted.isEmpty() ? null : sorted.get(0);
     }
     
     /**
      * 查找指定codeName的所有版本
      */
     public List<SourcePackage> findAllByCodeName(String codeName) {
-        return jdbc.query("SELECT * FROM source_packages WHERE code_name=? AND is_active=1 ORDER BY upload_time DESC",
+        List<SourcePackage> list = jdbc.query("SELECT * FROM source_packages WHERE code_name=? AND is_active=1",
                 new BeanPropertyRowMapper<>(SourcePackage.class), codeName);
+        return sortByVersionDesc(list);
+    }
+
+    private List<SourcePackage> sortByVersionDesc(List<SourcePackage> list) {
+        List<SourcePackage> sorted = new ArrayList<>(list);
+        sorted.sort(Comparator
+                .comparing(SourcePackage::getVersion, VersionUtils::compare)
+                .reversed()
+                .thenComparing(SourcePackage::getUploadTime, Comparator.nullsLast(Comparator.reverseOrder())));
+        return sorted;
     }
 }

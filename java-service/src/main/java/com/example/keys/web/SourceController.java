@@ -617,9 +617,34 @@ public class SourceController {
                 artifactUrl = s3.putObject(key, in, info.size(), "application/octet-stream");
             }
         }
-        repo.replacePackage(id, version, info.sha256(), bucketDir.toString(), info.ext(), info.finalPath().toString(), artifactUrl, info.size());
+        SourcePackage newVersion = new SourcePackage();
+        newVersion.setId(UUID.randomUUID().toString());
+        newVersion.setName(sp.getName());
+        newVersion.setCodeName(sp.getCodeName());
+        newVersion.setVersion(version);
+        newVersion.setDescription(sp.getDescription());
+        newVersion.setCountry(sp.getCountry());
+        newVersion.setWebsite(sp.getWebsite());
+        newVersion.setSha256(info.sha256());
+        newVersion.setBucketRelPath(bucketDir.toString());
+        newVersion.setPackageExt(info.ext());
+        newVersion.setPackagePath(info.finalPath().toString());
+        newVersion.setArtifactUrl(artifactUrl);
+        newVersion.setThumbnailPath(sp.getThumbnailPath());
+        newVersion.setThumbnailUrl(sp.getThumbnailUrl());
+        newVersion.setLogoPath(sp.getLogoPath());
+        newVersion.setLogoUrl(sp.getLogoUrl());
+        newVersion.setPreviewPath(sp.getPreviewPath());
+        newVersion.setPreviewUrl(sp.getPreviewUrl());
+        newVersion.setFileSize(info.size());
+        newVersion.setIsHidden(sp.getIsHidden());
+        newVersion.setInstallCode(sp.isHiddenEnabled() ? sp.getInstallCode() : null);
+        newVersion.setStatus("uploaded");
+        repo.insert(newVersion);
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
+        result.put("id", newVersion.getId());
+        result.put("previousId", id);
         result.put("version", version);
         result.put("sha256", info.sha256());
         if (!sp.isHiddenEnabled() && artifactUrl != null) {
@@ -629,8 +654,7 @@ public class SourceController {
     }
 
     /**
-     * 源码更新 - 覆盖更新现有源码包（直接替换文件，保持同一记录）
-     * 如需创建新版本记录，请使用 /sources/new-version 接口
+     * 源码更新。上传新源码包时创建新版本记录，保留旧版本和旧文件；只改元信息时原地更新。
      */
     @PostMapping(value = "/sources/{id}/update", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> updateSourcePackage(@PathVariable String id,
@@ -660,8 +684,9 @@ public class SourceController {
             String finalCountry = country != null ? country : sp.getCountry();
             String finalWebsite = website != null ? website : sp.getWebsite();
             String finalVersion = version != null && !version.trim().isEmpty() ? version : sp.getVersion();
+            boolean hasPackageFile = file != null && !file.isEmpty();
             
-            if (name != null || description != null || country != null || website != null) {
+            if (!hasPackageFile && (name != null || description != null || country != null || website != null)) {
                 repo.updateMeta(id, finalName, sp.getCodeName(), finalDesc, finalCountry, finalWebsite);
                 result.put("metaUpdated", true);
             }
@@ -682,14 +707,14 @@ public class SourceController {
             }
             
             // 更新版本号（如果提供了新版本）
-            if (version != null && !version.trim().isEmpty() && !version.equals(sp.getVersion())) {
+            if (!hasPackageFile && version != null && !version.trim().isEmpty() && !version.equals(sp.getVersion())) {
                 repo.updateVersion(id, version);
                 result.put("versionUpdated", true);
                 result.put("oldVersion", sp.getVersion());
             }
             
             // 更新缩略图
-            if (thumbnail != null && !thumbnail.isEmpty()) {
+            if (!hasPackageFile && thumbnail != null && !thumbnail.isEmpty()) {
                 var bucketDir = storage.bucketize(sp.getSha256());
                 var t = storage.saveThumbnail(thumbnail.getInputStream(), thumbnail.getOriginalFilename(), bucketDir);
                 String thumbUrl = null;
@@ -705,7 +730,7 @@ public class SourceController {
             }
             
             // 更新 Logo
-            if (logo != null && !logo.isEmpty()) {
+            if (!hasPackageFile && logo != null && !logo.isEmpty()) {
                 var bucketDir = storage.bucketize(sp.getSha256());
                 var p = storage.saveImage(logo.getInputStream(), logo.getOriginalFilename(), bucketDir, "logo");
                 String logoUrl = null;
@@ -720,8 +745,8 @@ public class SourceController {
                 result.put("logoUpdated", true);
             }
             
-            // 如果上传了新源码包 - 覆盖更新
-            if (file != null && !file.isEmpty()) {
+            // 如果上传了新源码包，创建新版本记录并保留旧版本文件。
+            if (hasPackageFile) {
                 // 保存新文件
                 var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
                 
@@ -733,62 +758,51 @@ public class SourceController {
                                  "existingVersion", existingBySha.getVersion());
                 }
                 
-                // 上传新包时版本必须前进，否则客户端按版本检查会误判为已是最新。
-                if (version == null || version.trim().isEmpty()
-                        || VersionUtils.compare(finalVersion, sp.getVersion()) <= 0) {
+                boolean autoVersion = version == null || version.trim().isEmpty()
+                        || VersionUtils.compare(finalVersion, sp.getVersion()) <= 0;
+                if (autoVersion) {
                     finalVersion = VersionUtils.increment(sp.getVersion());
+                    while (repo.existsByCodeNameAndVersion(sp.getCodeName(), finalVersion, null)) {
+                        finalVersion = VersionUtils.increment(finalVersion);
+                    }
                     result.put("versionAutoIncremented", true);
+                } else if (repo.existsByCodeNameAndVersion(sp.getCodeName(), finalVersion, null)) {
+                    return Map.of("success", false, "error", "版本 " + finalVersion + " 已存在");
                 }
                 result.put("oldVersion", sp.getVersion());
                 
                 String oldSha256 = sp.getSha256();
                 var bucketDir = storage.bucketize(info.sha256());
                 
-                // 继承缩略图和logo到新目录（如果没有上传新的）
                 String newThumbPath = sp.getThumbnailPath();
+                String newThumbUrl = sp.getThumbnailUrl();
                 String newLogoPath = sp.getLogoPath();
+                String newLogoUrl = sp.getLogoUrl();
                 
-                if ((thumbnail == null || thumbnail.isEmpty()) && sp.getThumbnailPath() != null) {
-                    // 复制旧的缩略图到新目录
-                    try {
-                        java.nio.file.Path oldThumb = java.nio.file.Path.of(sp.getThumbnailPath());
-                        if (java.nio.file.Files.exists(oldThumb)) {
-                            String thumbName = oldThumb.getFileName().toString();
-                            java.nio.file.Path newThumb = bucketDir.resolve(thumbName);
-                            java.nio.file.Files.createDirectories(newThumb.getParent());
-                            java.nio.file.Files.copy(oldThumb, newThumb, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                            newThumbPath = newThumb.toString();
+                if (thumbnail != null && !thumbnail.isEmpty()) {
+                    var t = storage.saveThumbnail(thumbnail.getInputStream(), thumbnail.getOriginalFilename(), bucketDir);
+                    newThumbPath = t.toString();
+                    newThumbUrl = null;
+                    if (s3.isEnabled() && !sp.isHiddenEnabled()) {
+                        try (var in = java.nio.file.Files.newInputStream(t)) {
+                            String fname = t.getFileName().toString();
+                            String ct = fname.endsWith("png") ? "image/png" : (fname.endsWith("webp") ? "image/webp" : "image/jpeg");
+                            newThumbUrl = s3.putObject(info.sha256() + "/" + fname, in, java.nio.file.Files.size(t), ct);
                         }
-                    } catch (Exception e) {
-                        // 忽略复制错误，保持原路径
                     }
                 }
                 
-                if ((logo == null || logo.isEmpty()) && sp.getLogoPath() != null) {
-                    // 复制旧的logo到新目录
-                    try {
-                        java.nio.file.Path oldLogo = java.nio.file.Path.of(sp.getLogoPath());
-                        if (java.nio.file.Files.exists(oldLogo)) {
-                            String logoName = oldLogo.getFileName().toString();
-                            java.nio.file.Path newLogo = bucketDir.resolve(logoName);
-                            java.nio.file.Files.createDirectories(newLogo.getParent());
-                            java.nio.file.Files.copy(oldLogo, newLogo, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                            newLogoPath = newLogo.toString();
+                if (logo != null && !logo.isEmpty()) {
+                    var p = storage.saveImage(logo.getInputStream(), logo.getOriginalFilename(), bucketDir, "logo");
+                    newLogoPath = p.toString();
+                    newLogoUrl = null;
+                    if (s3.isEnabled() && !sp.isHiddenEnabled()) {
+                        try (var in = java.nio.file.Files.newInputStream(p)) {
+                            String fname = p.getFileName().toString();
+                            String ct = fname.endsWith("png") ? "image/png" : (fname.endsWith("webp") ? "image/webp" : "image/jpeg");
+                            newLogoUrl = s3.putObject(info.sha256() + "/" + fname, in, java.nio.file.Files.size(p), ct);
                         }
-                    } catch (Exception e) {
-                        // 忽略复制错误，保持原路径
                     }
-                }
-                
-                // 删除旧的源码文件；如果新旧 SHA 相同，saveAndHash 会复用同一个 artifact，不能删。
-                if (sp.getPackagePath() != null) {
-                    try {
-                        java.nio.file.Path oldPackagePath = java.nio.file.Path.of(sp.getPackagePath()).toAbsolutePath().normalize();
-                        java.nio.file.Path newPackagePath = info.finalPath().toAbsolutePath().normalize();
-                        if (!oldPackagePath.equals(newPackagePath)) {
-                            java.nio.file.Files.deleteIfExists(oldPackagePath);
-                        }
-                    } catch (Exception e) {}
                 }
 
                 if (!java.nio.file.Files.exists(info.finalPath())) {
@@ -804,19 +818,33 @@ public class SourceController {
                     }
                 }
                 
-                // 更新数据库记录（覆盖旧的文件信息）
-                repo.replacePackage(id, finalVersion, info.sha256(), bucketDir.toString(), 
-                                   info.ext(), info.finalPath().toString(), artifactUrl, info.size());
-                
-                // 更新缩略图和logo路径
-                if (newThumbPath != null && !newThumbPath.equals(sp.getThumbnailPath())) {
-                    repo.updateThumbnail(id, newThumbPath, sp.getThumbnailUrl());
-                }
-                if (newLogoPath != null && !newLogoPath.equals(sp.getLogoPath())) {
-                    repo.updateLogo(id, newLogoPath, sp.getLogoUrl());
-                }
+                SourcePackage newVersion = new SourcePackage();
+                newVersion.setId(UUID.randomUUID().toString());
+                newVersion.setName(finalName);
+                newVersion.setCodeName(sp.getCodeName());
+                newVersion.setVersion(finalVersion);
+                newVersion.setDescription(finalDesc);
+                newVersion.setCountry(finalCountry);
+                newVersion.setWebsite(finalWebsite);
+                newVersion.setSha256(info.sha256());
+                newVersion.setBucketRelPath(bucketDir.toString());
+                newVersion.setPackageExt(info.ext());
+                newVersion.setPackagePath(info.finalPath().toString());
+                newVersion.setArtifactUrl(artifactUrl);
+                newVersion.setThumbnailPath(newThumbPath);
+                newVersion.setThumbnailUrl(newThumbUrl);
+                newVersion.setLogoPath(newLogoPath);
+                newVersion.setLogoUrl(newLogoUrl);
+                newVersion.setPreviewPath(sp.getPreviewPath());
+                newVersion.setPreviewUrl(sp.getPreviewUrl());
+                newVersion.setFileSize(info.size());
+                newVersion.setIsHidden(sp.getIsHidden());
+                newVersion.setInstallCode(sp.isHiddenEnabled() ? sp.getInstallCode() : null);
+                newVersion.setStatus("uploaded");
+                repo.insert(newVersion);
                 
                 result.put("packageUpdated", true);
+                result.put("newId", newVersion.getId());
                 result.put("oldSha256", oldSha256);
                 result.put("newSha256", info.sha256());
                 result.put("fileSize", info.size());
