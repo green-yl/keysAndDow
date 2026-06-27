@@ -8,7 +8,9 @@ import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Repository
 public class SourcePackageRepository {
@@ -37,23 +39,13 @@ public class SourcePackageRepository {
     }
 
     private List<SourcePackage> findAll(String q, String sortBy, String sortOrder, boolean includeHidden) {
-        // 验证排序字段，防止SQL注入
-        String orderColumn = switch (sortBy) {
-            case "download_count" -> "download_count";
-            case "upload_time" -> "upload_time";
-            case "file_size" -> "file_size";
-            default -> "update_time";
-        };
-        String order = "desc".equalsIgnoreCase(sortOrder) ? "DESC" : "ASC";
-        String visibilityClause = includeHidden ? "" : " AND COALESCE(is_hidden, 0)=0";
-        
-        if (q == null || q.isBlank()) {
-            return jdbc.query("SELECT * FROM source_packages WHERE is_active = 1" + visibilityClause + " ORDER BY " + orderColumn + " " + order,
-                    new BeanPropertyRowMapper<>(SourcePackage.class));
-        }
-        String like = "%" + q + "%";
-        return jdbc.query("SELECT * FROM source_packages WHERE is_active=1" + visibilityClause + " AND (name LIKE ? OR code_name LIKE ? OR version LIKE ? OR sha256 LIKE ?) ORDER BY " + orderColumn + " " + order,
-                new BeanPropertyRowMapper<>(SourcePackage.class), like, like, like, like);
+        List<SourcePackage> allVersions = jdbc.query("SELECT * FROM source_packages WHERE is_active=1",
+                new BeanPropertyRowMapper<>(SourcePackage.class));
+        List<SourcePackage> latestOnly = latestByCodeName(allVersions).stream()
+                .filter(sp -> includeHidden || !sp.isHiddenEnabled())
+                .toList();
+        List<SourcePackage> filtered = filterByQuery(latestOnly, q);
+        return sortForList(filtered, sortBy, sortOrder);
     }
 
     public SourcePackage findById(String id) {
@@ -199,5 +191,88 @@ public class SourcePackageRepository {
                 .reversed()
                 .thenComparing(SourcePackage::getUploadTime, Comparator.nullsLast(Comparator.reverseOrder())));
         return sorted;
+    }
+
+    private List<SourcePackage> latestByCodeName(List<SourcePackage> list) {
+        Map<String, SourcePackage> latest = new HashMap<>();
+        for (SourcePackage candidate : list) {
+            if (candidate == null || candidate.getCodeName() == null) {
+                continue;
+            }
+            SourcePackage current = latest.get(candidate.getCodeName());
+            if (current == null || compareVersionThenUpload(candidate, current) > 0) {
+                latest.put(candidate.getCodeName(), candidate);
+            }
+        }
+        return new ArrayList<>(latest.values());
+    }
+
+    private List<SourcePackage> filterByQuery(List<SourcePackage> list, String q) {
+        if (q == null || q.isBlank()) {
+            return list;
+        }
+        String needle = q.trim().toLowerCase();
+        return list.stream()
+                .filter(sp -> containsIgnoreCase(sp.getName(), needle)
+                        || containsIgnoreCase(sp.getCodeName(), needle)
+                        || containsIgnoreCase(sp.getVersion(), needle)
+                        || containsIgnoreCase(sp.getSha256(), needle))
+                .toList();
+    }
+
+    private boolean containsIgnoreCase(String value, String lowerNeedle) {
+        return value != null && value.toLowerCase().contains(lowerNeedle);
+    }
+
+    private List<SourcePackage> sortForList(List<SourcePackage> list, String sortBy, String sortOrder) {
+        List<SourcePackage> sorted = new ArrayList<>(list);
+        boolean desc = "desc".equalsIgnoreCase(sortOrder);
+        Comparator<SourcePackage> comparator = switch (sortBy) {
+            case "download_count" -> Comparator.comparing(sp -> desc ? -valueOrZero(sp.getDownloadCount()) : valueOrZero(sp.getDownloadCount()));
+            case "upload_time" -> comparingNullableTime(SourcePackage::getUploadTime, desc);
+            case "file_size" -> Comparator.comparing(sp -> desc ? -valueOrZero(sp.getFileSize()) : valueOrZero(sp.getFileSize()));
+            default -> comparingNullableTime(SourcePackage::getUpdateTime, desc);
+        };
+        sorted.sort(comparator);
+        return sorted;
+    }
+
+    private Comparator<SourcePackage> comparingNullableTime(java.util.function.Function<SourcePackage, java.time.LocalDateTime> getter, boolean desc) {
+        return (left, right) -> {
+            java.time.LocalDateTime leftValue = getter.apply(left);
+            java.time.LocalDateTime rightValue = getter.apply(right);
+            if (leftValue == null && rightValue == null) {
+                return 0;
+            }
+            if (leftValue == null) {
+                return 1;
+            }
+            if (rightValue == null) {
+                return -1;
+            }
+            int compared = leftValue.compareTo(rightValue);
+            return desc ? -compared : compared;
+        };
+    }
+
+    private int compareVersionThenUpload(SourcePackage left, SourcePackage right) {
+        int versionCompare = VersionUtils.compare(left.getVersion(), right.getVersion());
+        if (versionCompare != 0) {
+            return versionCompare;
+        }
+        if (left.getUploadTime() == null && right.getUploadTime() == null) {
+            return 0;
+        }
+        if (left.getUploadTime() == null) {
+            return -1;
+        }
+        if (right.getUploadTime() == null) {
+            return 1;
+        }
+        return left.getUploadTime().compareTo(right.getUploadTime());
+    }
+
+    private long valueOrZero(Number value) {
+        return value == null ? 0L : value.longValue();
     }
 }

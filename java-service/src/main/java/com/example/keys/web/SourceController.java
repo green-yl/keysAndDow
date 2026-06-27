@@ -605,8 +605,12 @@ public class SourceController {
                                               @RequestParam("package") MultipartFile file) throws Exception {
         var sp = repo.findById(id);
         if (sp == null) return Map.of("error", "not found");
-        if (repo.existsByCodeNameAndVersion(sp.getCodeName(), version, id)) {
+        if (repo.existsByCodeNameAndVersion(sp.getCodeName(), version, null)) {
             return Map.of("error", "该代码名与版本已存在");
+        }
+        SourcePackage latestForCode = repo.findLatestByCodeName(sp.getCodeName());
+        if (latestForCode != null && VersionUtils.compare(version, latestForCode.getVersion()) <= 0) {
+            return Map.of("error", "新版本必须大于当前最新版本 " + latestForCode.getVersion());
         }
         var info = storage.saveAndHash(file.getInputStream(), file.getOriginalFilename());
         var bucketDir = storage.bucketize(info.sha256());
@@ -758,10 +762,12 @@ public class SourceController {
                                  "existingVersion", existingBySha.getVersion());
                 }
                 
+                SourcePackage latestForCode = repo.findLatestByCodeName(sp.getCodeName());
+                SourcePackage versionBaseline = latestForCode != null ? latestForCode : sp;
                 boolean autoVersion = version == null || version.trim().isEmpty()
-                        || VersionUtils.compare(finalVersion, sp.getVersion()) <= 0;
+                        || VersionUtils.compare(finalVersion, versionBaseline.getVersion()) <= 0;
                 if (autoVersion) {
-                    finalVersion = VersionUtils.increment(sp.getVersion());
+                    finalVersion = VersionUtils.increment(versionBaseline.getVersion());
                     while (repo.existsByCodeNameAndVersion(sp.getCodeName(), finalVersion, null)) {
                         finalVersion = VersionUtils.increment(finalVersion);
                     }
@@ -769,7 +775,7 @@ public class SourceController {
                 } else if (repo.existsByCodeNameAndVersion(sp.getCodeName(), finalVersion, null)) {
                     return Map.of("success", false, "error", "版本 " + finalVersion + " 已存在");
                 }
-                result.put("oldVersion", sp.getVersion());
+                result.put("oldVersion", versionBaseline.getVersion());
                 
                 String oldSha256 = sp.getSha256();
                 var bucketDir = storage.bucketize(info.sha256());
@@ -879,6 +885,9 @@ public class SourceController {
             // 检查版本是否已存在
             if (repo.existsByCodeNameAndVersion(codeName, version, null)) {
                 return Map.of("success", false, "error", "版本 " + version + " 已存在");
+            }
+            if (VersionUtils.compare(version, latestSp.getVersion()) <= 0) {
+                return Map.of("success", false, "error", "新版本必须大于当前最新版本 " + latestSp.getVersion());
             }
             
             // 保存新文件
