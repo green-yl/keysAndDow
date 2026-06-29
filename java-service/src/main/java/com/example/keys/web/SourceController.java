@@ -188,18 +188,19 @@ public class SourceController {
     public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> thumbnailBySha(@PathVariable String sha256,
                                                                                                       HttpServletRequest request) throws Exception {
         var source = repo.findBySha256(sha256);
-        if (!canReadSourceImage(source, request)) {
+        if (source == null || !canReadSourceImage(source, request)) {
             return org.springframework.http.ResponseEntity.notFound().build();
+        }
+        org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> dbPathResponse = serveImagePath(source.getThumbnailPath());
+        if (dbPathResponse != null) {
+            return dbPathResponse;
         }
         java.nio.file.Path bucket = storage.bucketize(sha256);
         String[] names = new String[]{"thumbnail.png", "thumbnail.jpg", "thumbnail.jpeg", "thumbnail.webp"};
         for (String n : names) {
-            java.nio.file.Path p = bucket.resolve(n);
-            if (java.nio.file.Files.exists(p)) {
-                var res = new org.springframework.core.io.PathResource(p);
-                org.springframework.http.MediaType mt = n.endsWith("png") ? org.springframework.http.MediaType.IMAGE_PNG :
-                        (n.endsWith("webp") ? org.springframework.http.MediaType.valueOf("image/webp") : org.springframework.http.MediaType.IMAGE_JPEG);
-                return org.springframework.http.ResponseEntity.ok().contentType(mt).body(res);
+            org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> response = serveImagePath(bucket.resolve(n).toString());
+            if (response != null) {
+                return response;
             }
         }
         return org.springframework.http.ResponseEntity.notFound().build();
@@ -209,21 +210,38 @@ public class SourceController {
     public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> logoBySha(@PathVariable String sha256,
                                                                                                   HttpServletRequest request) throws Exception {
         var source = repo.findBySha256(sha256);
-        if (!canReadSourceImage(source, request)) {
+        if (source == null || !canReadSourceImage(source, request)) {
             return org.springframework.http.ResponseEntity.notFound().build();
+        }
+        org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> dbPathResponse = serveImagePath(source.getLogoPath());
+        if (dbPathResponse != null) {
+            return dbPathResponse;
         }
         java.nio.file.Path bucket = storage.bucketize(sha256);
         String[] names = new String[]{"logo.png", "logo.jpg", "logo.jpeg", "logo.webp"};
         for (String n : names) {
-            java.nio.file.Path p = bucket.resolve(n);
-            if (java.nio.file.Files.exists(p)) {
-                var res = new org.springframework.core.io.PathResource(p);
-                org.springframework.http.MediaType mt = n.endsWith("png") ? org.springframework.http.MediaType.IMAGE_PNG :
-                        (n.endsWith("webp") ? org.springframework.http.MediaType.valueOf("image/webp") : org.springframework.http.MediaType.IMAGE_JPEG);
-                return org.springframework.http.ResponseEntity.ok().contentType(mt).body(res);
+            org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> response = serveImagePath(bucket.resolve(n).toString());
+            if (response != null) {
+                return response;
             }
         }
         return org.springframework.http.ResponseEntity.notFound().build();
+    }
+
+    private org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> serveImagePath(String imagePath) {
+        if (!StringUtils.hasText(imagePath)) {
+            return null;
+        }
+        java.nio.file.Path path = java.nio.file.Path.of(imagePath);
+        if (!java.nio.file.Files.exists(path) || !java.nio.file.Files.isRegularFile(path)) {
+            return null;
+        }
+        String fileName = path.getFileName().toString().toLowerCase();
+        org.springframework.http.MediaType mediaType = fileName.endsWith(".png") ? org.springframework.http.MediaType.IMAGE_PNG :
+                (fileName.endsWith(".webp") ? org.springframework.http.MediaType.valueOf("image/webp") : org.springframework.http.MediaType.IMAGE_JPEG);
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(mediaType)
+                .body(new org.springframework.core.io.PathResource(path));
     }
 
     private boolean canReadSourceImage(SourcePackage source, HttpServletRequest request) {
