@@ -24,7 +24,7 @@ public class InterceptorConfig implements WebMvcConfigurer {
 
         registry.addInterceptor(apiKeyInterceptor)
                 .addPathPatterns("/api/**")
-                .excludePathPatterns("/api/auth/admin/**", "/api/admin/**");
+                .excludePathPatterns("/api/auth/admin/**", "/api/admin/**", "/api/tg-bot/usdt/callback");
     }
 }
 
