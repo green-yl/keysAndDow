@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
     is_active INTEGER DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    setting_key TEXT PRIMARY KEY,
+    setting_value TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Authorization system tables
 CREATE TABLE IF NOT EXISTS plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +78,45 @@ CREATE TABLE IF NOT EXISTS license_codes (
     FOREIGN KEY (plan_id) REFERENCES plans(id)
 );
 
+
+
+CREATE TABLE IF NOT EXISTS tg_wallets (
+    tg_user_id TEXT PRIMARY KEY,
+    balance_micros INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT (datetime('now')),
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tg_wallet_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tg_user_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    amount_micros INTEGER NOT NULL,
+    balance_after_micros INTEGER NOT NULL,
+    external_ref TEXT NOT NULL UNIQUE,
+    note TEXT,
+    created_at DATETIME DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS tg_topup_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL UNIQUE,
+    tg_user_id TEXT NOT NULL,
+    tg_username TEXT,
+    amount_usdt TEXT NOT NULL,
+    amount_micros INTEGER NOT NULL,
+    payable_amount TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    tx_id TEXT,
+    epusdt_trade_id TEXT,
+    epusdt_payment_url TEXT,
+    epusdt_receive_address TEXT,
+    epusdt_token TEXT,
+    epusdt_actual_amount TEXT,
+    created_at DATETIME DEFAULT (datetime('now')),
+    paid_at DATETIME,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS tg_payment_users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +145,11 @@ CREATE TABLE IF NOT EXISTS tg_payment_orders (
     activation_code TEXT,
     member_level_before TEXT,
     member_level_after TEXT,
+    epusdt_trade_id TEXT,
+    epusdt_payment_url TEXT,
+    epusdt_receive_address TEXT,
+    epusdt_token TEXT,
+    epusdt_actual_amount TEXT,
     created_at DATETIME DEFAULT (datetime('now')),
     paid_at DATETIME,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -151,6 +201,9 @@ CREATE TABLE IF NOT EXISTS download_tokens (
     token VARCHAR(64) NOT NULL UNIQUE,
     license_id INTEGER NOT NULL,
     file_id VARCHAR(128) NOT NULL,
+    license_code TEXT,
+    hwid TEXT,
+    source_id TEXT,
     expire_at DATETIME NOT NULL,
     used BOOLEAN DEFAULT FALSE,
     is_update BOOLEAN DEFAULT FALSE,
@@ -186,6 +239,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 -- Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_tg_topup_orders_user ON tg_topup_orders(tg_user_id);
+CREATE INDEX IF NOT EXISTS idx_tg_topup_orders_status ON tg_topup_orders(status);
+CREATE INDEX IF NOT EXISTS idx_tg_wallet_ledger_user ON tg_wallet_ledger(tg_user_id);
 CREATE INDEX IF NOT EXISTS idx_tg_payment_orders_user ON tg_payment_orders(tg_user_id);
 CREATE INDEX IF NOT EXISTS idx_tg_payment_orders_status ON tg_payment_orders(status);
 CREATE INDEX IF NOT EXISTS idx_tg_payment_orders_tx_id ON tg_payment_orders(tx_id);

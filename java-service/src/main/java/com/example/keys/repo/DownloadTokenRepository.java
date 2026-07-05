@@ -32,6 +32,9 @@ public class DownloadTokenRepository {
             token.setToken(rs.getString("token"));
             token.setLicenseId(rs.getLong("license_id"));
             token.setFileId(rs.getString("file_id"));
+            token.setLicenseCode(getNullableString(rs, "license_code"));
+            token.setHwid(getNullableString(rs, "hwid"));
+            token.setSourceId(getNullableString(rs, "source_id"));
             
             // 处理时间戳解析问题
             token.setExpireAt(parseTimestamp(rs, "expire_at"));
@@ -53,6 +56,14 @@ public class DownloadTokenRepository {
             return token;
         }
         
+        private String getNullableString(ResultSet rs, String columnName) {
+            try {
+                return rs.getString(columnName);
+            } catch (SQLException e) {
+                return null;
+            }
+        }
+
         private LocalDateTime parseTimestamp(ResultSet rs, String columnName) throws SQLException {
             try {
                 return rs.getTimestamp(columnName).toLocalDateTime();
@@ -71,8 +82,8 @@ public class DownloadTokenRepository {
     };
     
     public Long insert(DownloadToken downloadToken) {
-        String sql = "INSERT INTO download_tokens (token, license_id, file_id, expire_at, used, is_update, from_version, created_at) " +
-                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO download_tokens (token, license_id, file_id, license_code, hwid, source_id, expire_at, used, is_update, from_version, created_at) " +
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         
         KeyHolder keyHolder = new GeneratedKeyHolder();
         
@@ -81,11 +92,14 @@ public class DownloadTokenRepository {
             ps.setString(1, downloadToken.getToken());
             ps.setLong(2, downloadToken.getLicenseId());
             ps.setString(3, downloadToken.getFileId());
-            ps.setObject(4, downloadToken.getExpireAt());
-            ps.setBoolean(5, downloadToken.getUsed());
-            ps.setBoolean(6, downloadToken.getIsUpdate() != null ? downloadToken.getIsUpdate() : false);
-            ps.setString(7, downloadToken.getFromVersion());
-            ps.setObject(8, LocalDateTime.now());
+            ps.setString(4, downloadToken.getLicenseCode());
+            ps.setString(5, downloadToken.getHwid());
+            ps.setString(6, downloadToken.getSourceId() != null ? downloadToken.getSourceId() : downloadToken.getFileId());
+            ps.setObject(7, downloadToken.getExpireAt());
+            ps.setBoolean(8, downloadToken.getUsed());
+            ps.setBoolean(9, downloadToken.getIsUpdate() != null ? downloadToken.getIsUpdate() : false);
+            ps.setString(10, downloadToken.getFromVersion());
+            ps.setObject(11, LocalDateTime.now());
             return ps;
         }, keyHolder);
         

@@ -20,9 +20,17 @@ public class DatabaseMigrationRunner implements CommandLineRunner {
 
     @Override
     public void run(String... args) throws Exception {
+        ensureAppSettingsTable();
         ensureTgActivationOrdersTable();
         ensureTgPaymentUsersTable();
         ensureTgPaymentOrdersTable();
+        ensureTgWalletTables();
+        ensureTgTopupOrdersTable();
+        ensureColumn("tg_payment_orders", "epusdt_trade_id", "TEXT");
+        ensureColumn("tg_payment_orders", "epusdt_payment_url", "TEXT");
+        ensureColumn("tg_payment_orders", "epusdt_receive_address", "TEXT");
+        ensureColumn("tg_payment_orders", "epusdt_token", "TEXT");
+        ensureColumn("tg_payment_orders", "epusdt_actual_amount", "TEXT");
 
         ensureColumn("source_packages", "artifact_url", "TEXT");
         ensureColumn("source_packages", "thumbnail_url", "TEXT");
@@ -34,10 +42,49 @@ public class DatabaseMigrationRunner implements CommandLineRunner {
         ensureColumn("source_packages", "preview_url", "TEXT");
         ensureColumn("source_packages", "is_hidden", "INTEGER DEFAULT 0");
         ensureColumn("source_packages", "install_code", "TEXT");
+        syncSourcePackageDownloadCounts();
         
         // 添加 licenses 表的服务器IP相关字段
         ensureColumn("licenses", "server_ip", "VARCHAR(45)");
         ensureColumn("licenses", "last_server_switch_at", "DATETIME");
+        ensureColumn("license_codes", "issue_limit", "INTEGER NOT NULL DEFAULT 1");
+        ensureColumn("license_codes", "issue_count", "INTEGER NOT NULL DEFAULT 0");
+        ensureColumn("download_tokens", "license_code", "TEXT");
+        ensureColumn("download_tokens", "hwid", "TEXT");
+        ensureColumn("download_tokens", "source_id", "TEXT");
+        ensureIndex("idx_download_tokens_license_code", "download_tokens", "license_code");
+        ensureIndex("idx_download_tokens_hwid", "download_tokens", "hwid");
+    }
+
+
+    private void syncSourcePackageDownloadCounts() {
+        try {
+            jdbc.update("""
+                    UPDATE source_packages
+                    SET download_count = (
+                        SELECT COALESCE(MAX(s2.download_count), 0)
+                        FROM source_packages s2
+                        WHERE s2.code_name = source_packages.code_name AND s2.is_active=1
+                    )
+                    WHERE is_active=1
+                    """);
+        } catch (Exception e) {
+            log.warn("DB migration: failed to sync source package download_count: {}", e.getMessage());
+        }
+    }
+
+    private void ensureAppSettingsTable() {
+        try {
+            jdbc.execute("""
+                    CREATE TABLE IF NOT EXISTS app_settings (
+                        setting_key TEXT PRIMARY KEY,
+                        setting_value TEXT,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """);
+        } catch (Exception e) {
+            log.warn("DB migration: failed to ensure app_settings table: {}", e.getMessage());
+        }
     }
 
     private void ensureTgActivationOrdersTable() {
@@ -103,6 +150,11 @@ public class DatabaseMigrationRunner implements CommandLineRunner {
                         activation_code TEXT,
                         member_level_before TEXT,
                         member_level_after TEXT,
+                        epusdt_trade_id TEXT,
+                        epusdt_payment_url TEXT,
+                        epusdt_receive_address TEXT,
+                        epusdt_token TEXT,
+                        epusdt_actual_amount TEXT,
                         created_at DATETIME DEFAULT (datetime('now')),
                         paid_at DATETIME,
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -115,6 +167,61 @@ public class DatabaseMigrationRunner implements CommandLineRunner {
         }
     }
 
+    private void ensureTgWalletTables() {
+        try {
+            jdbc.execute("""
+                    CREATE TABLE IF NOT EXISTS tg_wallets (
+                        tg_user_id TEXT PRIMARY KEY,
+                        balance_micros INTEGER NOT NULL DEFAULT 0,
+                        created_at DATETIME DEFAULT (datetime('now')),
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """);
+            jdbc.execute("""
+                    CREATE TABLE IF NOT EXISTS tg_wallet_ledger (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        tg_user_id TEXT NOT NULL,
+                        direction TEXT NOT NULL,
+                        amount_micros INTEGER NOT NULL,
+                        balance_after_micros INTEGER NOT NULL,
+                        external_ref TEXT NOT NULL UNIQUE,
+                        note TEXT,
+                        created_at DATETIME DEFAULT (datetime('now'))
+                    )
+                    """);
+        } catch (Exception e) {
+            log.warn("DB migration: failed to ensure tg wallet tables: {}", e.getMessage());
+        }
+    }
+
+    private void ensureTgTopupOrdersTable() {
+        try {
+            jdbc.execute("""
+                    CREATE TABLE IF NOT EXISTS tg_topup_orders (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        order_id TEXT NOT NULL UNIQUE,
+                        tg_user_id TEXT NOT NULL,
+                        tg_username TEXT,
+                        amount_usdt TEXT NOT NULL,
+                        amount_micros INTEGER NOT NULL,
+                        payable_amount TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        tx_id TEXT,
+                        epusdt_trade_id TEXT,
+                        epusdt_payment_url TEXT,
+                        epusdt_receive_address TEXT,
+                        epusdt_token TEXT,
+                        epusdt_actual_amount TEXT,
+                        created_at DATETIME DEFAULT (datetime('now')),
+                        paid_at DATETIME,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """);
+        } catch (Exception e) {
+            log.warn("DB migration: failed to ensure tg_topup_orders table: {}", e.getMessage());
+        }
+    }
+
     private void ensureColumn(String table, String column, String type) {
         try {
             if (!columnExists(table, column)) {
@@ -124,6 +231,16 @@ public class DatabaseMigrationRunner implements CommandLineRunner {
             }
         } catch (Exception e) {
             log.warn("DB migration: failed to add column {}.{}: {}", table, column, e.getMessage());
+        }
+    }
+
+    private void ensureIndex(String indexName, String table, String column) {
+        try {
+            if (columnExists(table, column)) {
+                jdbc.execute("CREATE INDEX IF NOT EXISTS " + indexName + " ON " + table + "(" + column + ")");
+            }
+        } catch (Exception e) {
+            log.warn("DB migration: failed to ensure index {}: {}", indexName, e.getMessage());
         }
     }
 

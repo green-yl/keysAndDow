@@ -5,7 +5,9 @@ import com.example.keys.service.DownloadReceiptService;
 import com.example.keys.service.SourceAccessService;
 import com.example.keys.repo.SourcePackageRepository;
 import com.example.keys.repo.DownloadTokenRepository;
+import com.example.keys.repo.LicenseRepository;
 import com.example.keys.model.DownloadToken;
+import com.example.keys.model.License;
 import com.example.keys.model.SourcePackage;
 import com.example.keys.util.IpUtils;
 import com.example.keys.util.ResponseHelper;
@@ -36,6 +38,9 @@ public class DownloadController {
     
     @Autowired
     private DownloadTokenRepository downloadTokenRepository;
+
+    @Autowired
+    private LicenseRepository licenseRepository;
     
     @Autowired
     private DownloadReceiptService downloadReceiptService;
@@ -106,52 +111,90 @@ public class DownloadController {
         return ResponseHelper.fromServiceResult(commitResult);
     }
     
+    @GetMapping("/{token}")
+    public ResponseEntity<?> downloadByToken(@PathVariable String token, HttpServletRequest httpRequest) {
+        Optional<DownloadToken> tokenOpt = downloadTokenRepository.findByToken(token);
+        if (tokenOpt.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("ok", false, "error", "下载令牌不存在"));
+        }
+        return serveTokenDownload(tokenOpt.get().getFileId(), token, httpRequest);
+    }
+
     @GetMapping("/file/{fileId}")
-    public ResponseEntity<?> downloadFile(@PathVariable String fileId, 
+    public ResponseEntity<?> downloadFile(@PathVariable String fileId,
                                         @RequestParam String token,
                                         HttpServletRequest httpRequest) {
+        return serveTokenDownload(fileId, token, httpRequest);
+    }
+
+    private ResponseEntity<?> serveTokenDownload(String fileId, String token, HttpServletRequest httpRequest) {
         try {
             Optional<DownloadToken> tokenOpt = downloadTokenRepository.findByToken(token);
-            
+
             if (tokenOpt.isEmpty()) {
                 return ResponseEntity.status(404).body(Map.of(
                     "ok", false, "error", "下载令牌不存在"));
             }
-            
+
             DownloadToken downloadToken = tokenOpt.get();
-            
+
             if (downloadToken.getExpireAt().isBefore(LocalDateTime.now())) {
                 return ResponseEntity.status(410).body(Map.of(
                     "ok", false, "error", "下载令牌已过期"));
             }
-            
-            if (!fileId.equals(downloadToken.getFileId())) {
+
+            if (Boolean.TRUE.equals(downloadToken.getUsed())) {
+                return ResponseEntity.status(409).body(Map.of(
+                    "ok", false, "error", "下载令牌已使用"));
+            }
+
+            if (!fileId.equals(downloadToken.getFileId()) ||
+                    (downloadToken.getSourceId() != null && !fileId.equals(downloadToken.getSourceId()))) {
                 return ResponseEntity.badRequest().body(Map.of(
                     "ok", false, "error", "文件ID不匹配"));
             }
-            
+
+            Optional<License> licenseOpt = licenseRepository.findById(downloadToken.getLicenseId());
+            if (licenseOpt.isEmpty()) {
+                return ResponseEntity.status(403).body(Map.of("ok", false, "error", "许可证不存在"));
+            }
+            License license = licenseOpt.get();
+            if (!"ok".equals(license.getStatus()) || license.getValidTo().isBefore(LocalDateTime.now())) {
+                return ResponseEntity.status(403).body(Map.of("ok", false, "error", "许可证状态异常"));
+            }
+            if (downloadToken.getLicenseCode() == null || downloadToken.getHwid() == null ||
+                    !downloadToken.getLicenseCode().equals(license.getCode()) ||
+                    !downloadToken.getHwid().equals(license.getHwid())) {
+                return ResponseEntity.status(403).body(Map.of("ok", false, "error", "下载令牌绑定信息不匹配"));
+            }
+
             SourcePackage source = sourcePackageRepository.findBySha256(fileId);
             if (source == null) {
                 return ResponseEntity.status(404).body(Map.of(
                     "ok", false, "error", "源码文件不存在"));
             }
-            
+
             String filePath = source.getPackagePath();
             if (filePath == null || !new File(filePath).exists()) {
                 return ResponseEntity.status(404).body(Map.of(
                     "ok", false, "error", "源码文件路径不存在"));
             }
-            
+
+            int reserved = downloadTokenRepository.markAsUsed(token);
+            if (reserved <= 0) {
+                return ResponseEntity.status(409).body(Map.of("ok", false, "error", "下载令牌已使用"));
+            }
+
             File file = new File(filePath);
             Resource resource = new FileSystemResource(file);
             String filename = source.getName() + "_" + source.getVersion() + source.getPackageExt();
-            
+
             String ip = IpUtils.getClientIpAddress(httpRequest);
             downloadReceiptService.submitReceipt(token, true, file.length(), fileId,
                     ip, httpRequest.getHeader("User-Agent"), "token_file_download");
-            
+
             sourcePackageRepository.incrementDownloadCount(fileId);
-            
+
             return ResponseEntity.ok()
                     .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                     .header("X-Download-Token", token)
@@ -160,7 +203,7 @@ public class DownloadController {
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .contentLength(file.length())
                     .body(resource);
-                    
+
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of(
                 "ok", false, "error", "下载失败：" + e.getMessage()));

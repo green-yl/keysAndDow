@@ -111,62 +111,75 @@ public class AuthorizationService {
             }
             
             // 2. 检查是否已存在此激活码的许可证
-            // ✅ 允许多次激活，但需间隔1小时，再次激活后旧设备失效
+            // 策略：同服务器重复激活幂等；换服务器激活必须间隔24小时，并受 issue_limit 总次数限制。
+            LocalDateTime now = LocalDateTime.now();
+            boolean shouldIncrementIssueCount = true;
+            boolean serverSwitchActivation = false;
             Optional<License> existingLicenseByCode = licenseRepository.findLatestByCode(code);
             if (existingLicenseByCode.isPresent()) {
                 License existingLicense = existingLicenseByCode.get();
-                
-                // 检查上次激活时间，必须间隔1小时以上（无论是否同一设备）
-                LocalDateTime lastActivated = existingLicense.getUpdatedAt() != null ? 
-                    existingLicense.getUpdatedAt() : existingLicense.getValidFrom();
-                LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
-                
-                // 同一设备同一激活码，且未过期，检查是否在1小时内
-                if (hwid.equals(existingLicense.getHwid())) {
-                    if ("ok".equals(existingLicense.getStatus()) && existingLicense.getValidTo().isAfter(LocalDateTime.now())) {
-                        // 同一设备，直接返回现有许可证（无需等待1小时）
-                        Map<String, Object> serverBindingResult = serverManagementService.checkServerBinding(code, hwid, serverIp);
-                        if (!(Boolean) serverBindingResult.get("ok")) {
-                            return serverBindingResult;
-                        }
-                        
-                        result.put("ok", true);
-                        result.put("license", buildLicenseResponse(existingLicense));
-                        result.put("plan", buildPlanResponse(existingLicense));
-                        result.put("quota", buildQuotaResponse(existingLicense));
-                        result.put("valid_from", existingLicense.getValidFrom());
-                        result.put("valid_to", existingLicense.getValidTo());
-                        result.put("existing", true);
-                        result.put("server_action", serverBindingResult.get("action"));
-                        result.put("server_message", serverBindingResult.get("message"));
-                        return result;
-                    }
-                } else {
-                    // 不同设备 - 检查是否间隔1小时
-                    if (lastActivated.isAfter(oneHourAgo)) {
-                        // 距离上次激活不足1小时
-                        long minutesRemaining = java.time.Duration.between(LocalDateTime.now(), lastActivated.plusHours(1)).toMinutes();
-                        result.put("ok", false);
-                        result.put("error", "距离上次激活不足1小时，请" + Math.max(1, minutesRemaining) + "分钟后再试");
-                        result.put("code", 403);
-                        return result;
-                    }
+                String boundServerIp = normalizeServerIp(existingLicense.getServerIp());
+                String currentServerIp = normalizeServerIp(serverIp);
+                boolean sameServer = boundServerIp != null && boundServerIp.equals(currentServerIp);
+                boolean sameDevice = Objects.equals(hwid, existingLicense.getHwid());
+                boolean existingUsable = "ok".equals(existingLicense.getStatus())
+                        && existingLicense.getValidTo() != null
+                        && existingLicense.getValidTo().isAfter(now);
+
+                if (sameServer && sameDevice && existingUsable) {
+                    result.put("ok", true);
+                    result.put("license", buildLicenseResponse(existingLicense));
+                    result.put("plan", buildPlanResponse(existingLicense));
+                    result.put("quota", buildQuotaResponse(existingLicense));
+                    result.put("valid_from", existingLicense.getValidFrom());
+                    result.put("valid_to", existingLicense.getValidTo());
+                    result.put("existing", true);
+                    result.put("server_action", "allowed");
+                    result.put("server_message", "当前服务器已授权使用此激活码");
+                    return result;
                 }
-                
-                // ✅ 无论是否同一设备，都吊销旧许可证，创建新的
-                // 这样可以确保只有一个有效的许可证
+
+                if (sameServer) {
+                    // 同服务器重新激活只替换本服务器许可证，不消耗激活次数。
+                    shouldIncrementIssueCount = false;
+                } else {
+                    long minutesRemaining = minutesUntilServerSwitchAllowed(existingLicense, now);
+                    if (minutesRemaining > 0) {
+                        result.put("ok", false);
+                        result.put("error", "距离上次换服务器激活不足24小时，请" + Math.max(1, minutesRemaining) + "分钟后再试");
+                        result.put("code", 403);
+                        result.put("cooldown_remaining", minutesRemaining);
+                        result.put("bound_server", boundServerIp);
+                        return result;
+                    }
+
+                    if (isIssueLimitReached(licenseCode)) {
+                        result.put("ok", false);
+                        result.put("error", "激活次数已达上限，无法更换服务器");
+                        result.put("code", 403);
+                        result.put("issue_count", safeInt(licenseCode.getIssueCount()));
+                        result.put("issue_limit", safeInt(licenseCode.getIssueLimit()));
+                        return result;
+                    }
+                    serverSwitchActivation = true;
+                }
+
                 licenseRepository.revokeByCode(code, "被新激活替换，新设备hwid: " + hwid + "，新服务器IP: " + serverIp);
-                
-                // 记录审计日志
+
                 auditLogRepository.insert(new AuditLog(
-                    "system", "license_replaced", 
+                    "system", serverSwitchActivation ? "server_replaced" : "license_reissued",
                     "license:" + existingLicense.getId(),
-                    "旧许可证被替换，旧设备：" + existingLicense.getHwid() + "，新设备：" + hwid + "，新服务器：" + serverIp
+                    "旧许可证被替换，旧设备：" + existingLicense.getHwid() + "，新设备：" + hwid + "，旧服务器：" + boundServerIp + "，新服务器：" + serverIp
                 ));
+            } else if (isIssueLimitReached(licenseCode)) {
+                result.put("ok", false);
+                result.put("error", "激活次数已达上限");
+                result.put("code", 403);
+                result.put("issue_count", safeInt(licenseCode.getIssueCount()));
+                result.put("issue_limit", safeInt(licenseCode.getIssueLimit()));
+                return result;
             }
-            
-            // ✅ 注意：不再检查 issue_limit，允许无限次激活（每次激活使旧的失效）
-            
+
             // 3. 获取套餐信息
             Optional<Plan> planOpt = planRepository.findById(licenseCode.getPlanId());
             if (!planOpt.isPresent()) {
@@ -179,7 +192,6 @@ public class AuthorizationService {
             Plan plan = planOpt.get();
             
             // 4. 生成许可证
-            LocalDateTime now = LocalDateTime.now();
             LocalDateTime validFrom = now;
             LocalDateTime validTo = now.plusHours(plan.getDurationHours());
             String kid = licenseSignatureService.getCurrentKid();
@@ -214,12 +226,17 @@ public class AuthorizationService {
             
             // 设置服务器IP（首次激活时直接绑定）
             license.setServerIp(serverIp);
+            if (serverSwitchActivation) {
+                license.setLastServerSwitchAt(now);
+            }
             
             Long licenseId = licenseRepository.insert(license);
             license.setId(licenseId);
             
-            // 6. 更新激活码使用次数
-            licenseCodeRepository.incrementIssueCount(code);
+            // 6. 更新激活码使用次数：同服务器重复激活不消耗次数
+            if (shouldIncrementIssueCount) {
+                licenseCodeRepository.incrementIssueCount(code);
+            }
             
             // 7. 记录审计日志
             auditLogRepository.insert(new AuditLog(
@@ -472,7 +489,8 @@ public class AuthorizationService {
             String token = UUID.randomUUID().toString().replace("-", "");
             LocalDateTime expireAt = LocalDateTime.now().plusMinutes(10); // 10分钟有效期
             
-            DownloadToken downloadToken = new DownloadToken(token, license.getId(), fileId, expireAt, verifiedUpdate, fromVersion);
+            DownloadToken downloadToken = new DownloadToken(token, license.getId(), fileId, expireAt,
+                    verifiedUpdate, fromVersion, license.getCode(), license.getHwid(), sourcePackage.getSha256());
             downloadTokenRepository.insert(downloadToken);
             
             // 5. 生成下载URL（这里简化处理，实际应该根据fileId生成具体的下载URL）
@@ -597,7 +615,7 @@ public class AuthorizationService {
             
             if (Boolean.TRUE.equals(ok)) {
                 // 下载成功，尝试扣次
-                int updateCount = downloadTokenRepository.markAsUsed(downloadToken);
+                int updateCount = Boolean.TRUE.equals(token.getUsed()) ? 1 : downloadTokenRepository.markAsUsed(downloadToken);
                 if (updateCount > 0) {
                     // 检查是否为更新请求（更新请求不扣除配额）
                     boolean isUpdateRequest = token.getIsUpdate() != null && token.getIsUpdate();
@@ -664,6 +682,36 @@ public class AuthorizationService {
         }
     }
     
+    private boolean isIssueLimitReached(LicenseCode licenseCode) {
+        int limit = safeInt(licenseCode.getIssueLimit());
+        if (limit <= 0) {
+            return true;
+        }
+        return safeInt(licenseCode.getIssueCount()) >= limit;
+    }
+
+    private int safeInt(Integer value) {
+        return value == null ? 0 : value;
+    }
+
+    private String normalizeServerIp(String ip) {
+        if (ip == null) return null;
+        String normalized = ip.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private long minutesUntilServerSwitchAllowed(License license, LocalDateTime now) {
+        LocalDateTime base = license.getLastServerSwitchAt();
+        if (base == null) base = license.getUpdatedAt();
+        if (base == null) base = license.getValidFrom();
+        if (base == null) return 0;
+        LocalDateTime nextAllowedAt = base.plusHours(24);
+        if (!nextAllowedAt.isAfter(now)) {
+            return 0;
+        }
+        return java.time.Duration.between(now, nextAllowedAt).toMinutes();
+    }
+
     // 辅助方法
     private Map<String, Object> buildLicenseResponse(License license) {
         return Map.of(
