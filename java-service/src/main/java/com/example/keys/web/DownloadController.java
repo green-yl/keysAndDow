@@ -3,6 +3,7 @@ package com.example.keys.web;
 import com.example.keys.service.AuthorizationService;
 import com.example.keys.service.DownloadReceiptService;
 import com.example.keys.service.SourceAccessService;
+import com.example.keys.service.RateLimitService;
 import com.example.keys.repo.SourcePackageRepository;
 import com.example.keys.repo.DownloadTokenRepository;
 import com.example.keys.repo.LicenseRepository;
@@ -48,6 +49,9 @@ public class DownloadController {
     @Autowired
     private SourceAccessService sourceAccessService;
 
+    @Autowired
+    private RateLimitService rateLimitService;
+
     @PostMapping("/preauth")
     public ResponseEntity<?> preauth(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
         @SuppressWarnings("unchecked")
@@ -65,6 +69,15 @@ public class DownloadController {
                 "error", "缺少必要参数：license、hwid 和 file_id"
             ));
         }
+
+        String ip = IpUtils.getClientIpAddress(httpRequest);
+        if (!rateLimitService.allowPreauthRequest(ip, hwid)) {
+            return ResponseEntity.status(429).body(Map.of(
+                "ok", false,
+                "error", "预授权请求过于频繁，请稍后重试",
+                "code", 429
+            ));
+        }
         
         String payload = (String) license.get("payload");
         String sig = (String) license.get("sig");
@@ -76,7 +89,6 @@ public class DownloadController {
             ));
         }
         
-        String ip = IpUtils.getClientIpAddress(httpRequest);
         String installCode = sourceAccessService.extractInstallCode(httpRequest, request);
         
         Map<String, Object> result;
@@ -105,6 +117,13 @@ public class DownloadController {
         }
         
         String ip = IpUtils.getClientIpAddress(httpRequest);
+        if (!rateLimitService.allowCommitRequest(ip, downloadToken)) {
+            return ResponseEntity.status(429).body(Map.of(
+                "ok", false,
+                "error", "回执请求过于频繁，请稍后重试",
+                "code", 429
+            ));
+        }
         String ua = httpRequest.getHeader("User-Agent");
         
         Map<String, Object> commitResult = authorizationService.downloadCommit(downloadToken, result, clientInfo, ip, ua);
@@ -129,6 +148,10 @@ public class DownloadController {
 
     private ResponseEntity<?> serveTokenDownload(String fileId, String token, HttpServletRequest httpRequest) {
         try {
+            if (!rateLimitService.allowDownloadToken(IpUtils.getClientIpAddress(httpRequest), token)) {
+                return ResponseEntity.status(429).body(Map.of("ok", false, "error", "下载请求过于频繁，请稍后重试", "code", 429));
+            }
+
             Optional<DownloadToken> tokenOpt = downloadTokenRepository.findByToken(token);
 
             if (tokenOpt.isEmpty()) {
