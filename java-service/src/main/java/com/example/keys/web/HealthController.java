@@ -42,5 +42,13 @@ public class HealthController {
 
         return ResponseEntity.ok(result);
     }
-}
 
+    @GetMapping("/system/ping")
+    public ResponseEntity<Map<String, Object>> ping() {
+        return ResponseEntity.ok(Map.of(
+                "ok", true,
+                "service", "keysAndDwd",
+                "timestamp", System.currentTimeMillis()
+        ));
+    }
+}
