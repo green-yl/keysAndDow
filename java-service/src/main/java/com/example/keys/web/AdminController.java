@@ -22,6 +22,16 @@ public class AdminController {
     @Autowired
     private ServerManagementService serverManagementService;
     
+    private ResponseEntity<?> requireDangerConfirm(String confirm) {
+        if ("true".equalsIgnoreCase(confirm)) {
+            return null;
+        }
+        return ResponseEntity.status(428).body(Map.of(
+            "ok", false,
+            "error", "请先确认危险操作"
+        ));
+    }
+
     /**
      * 套餐管理
      */
@@ -67,7 +77,10 @@ public class AdminController {
     }
     
     @DeleteMapping("/plans/{id}")
-    public ResponseEntity<?> deletePlan(@PathVariable Long id) {
+    public ResponseEntity<?> deletePlan(@PathVariable Long id,
+                                        @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        ResponseEntity<?> rejected = requireDangerConfirm(confirm);
+        if (rejected != null) return rejected;
         boolean deleted = adminService.deletePlan(id);
         
         if (deleted) {
@@ -166,7 +179,10 @@ public class AdminController {
      * 删除激活码（连带删除对应的许可证）
      */
     @DeleteMapping("/codes/{code}")
-    public ResponseEntity<?> deleteLicenseCode(@PathVariable String code) {
+    public ResponseEntity<?> deleteLicenseCode(@PathVariable String code,
+                                               @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        ResponseEntity<?> rejected = requireDangerConfirm(confirm);
+        if (rejected != null) return rejected;
         try {
             Map<String, Object> result = adminService.deleteLicenseCodeAndRelatedLicenses(code);
             return ResponseEntity.ok(result);
@@ -187,7 +203,10 @@ public class AdminController {
     }
     
     @PostMapping("/licenses/{id}/renew")
-    public ResponseEntity<?> renewLicense(@PathVariable Long id, @RequestBody Map<String, Object> request) {
+    public ResponseEntity<?> renewLicense(@PathVariable Long id, @RequestBody Map<String, Object> request,
+                                          @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        ResponseEntity<?> rejected = requireDangerConfirm(confirm);
+        if (rejected != null) return rejected;
         Integer extraDays = (Integer) request.get("extra_days");
         Boolean resetQuota = (Boolean) request.get("reset_quota");
         
@@ -208,7 +227,10 @@ public class AdminController {
     }
     
     @PostMapping("/licenses/{id}/add-quota")
-    public ResponseEntity<?> addQuota(@PathVariable Long id, @RequestBody Map<String, Object> request) {
+    public ResponseEntity<?> addQuota(@PathVariable Long id, @RequestBody Map<String, Object> request,
+                                      @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        ResponseEntity<?> rejected = requireDangerConfirm(confirm);
+        if (rejected != null) return rejected;
         Integer extra = (Integer) request.get("extra");
         
         if (extra == null) {
@@ -228,7 +250,10 @@ public class AdminController {
     }
     
     @PostMapping("/licenses/{id}/revoke")
-    public ResponseEntity<?> revokeLicense(@PathVariable Long id, @RequestBody Map<String, Object> request) {
+    public ResponseEntity<?> revokeLicense(@PathVariable Long id, @RequestBody Map<String, Object> request,
+                                           @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        ResponseEntity<?> rejected = requireDangerConfirm(confirm);
+        if (rejected != null) return rejected;
         String reason = (String) request.get("reason");
         
         boolean revoked = adminService.revokeLicense(id, reason);
@@ -241,7 +266,10 @@ public class AdminController {
     }
     
     @PostMapping("/licenses/{id}/rebind")
-    public ResponseEntity<?> rebindLicense(@PathVariable Long id, @RequestBody Map<String, Object> request) {
+    public ResponseEntity<?> rebindLicense(@PathVariable Long id, @RequestBody Map<String, Object> request,
+                                           @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        ResponseEntity<?> rejected = requireDangerConfirm(confirm);
+        if (rejected != null) return rejected;
         String newHwid = (String) request.get("new_hwid");
         
         if (newHwid == null) {
@@ -324,7 +352,9 @@ public class AdminController {
      * 清空所有审计日志
      */
     @DeleteMapping("/audit-logs")
-    public ResponseEntity<?> clearAllAuditLogs() {
+    public ResponseEntity<?> clearAllAuditLogs(@RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        ResponseEntity<?> rejected = requireDangerConfirm(confirm);
+        if (rejected != null) return rejected;
         return ResponseEntity.ok(adminService.clearAllAuditLogs());
     }
     
@@ -332,7 +362,10 @@ public class AdminController {
      * 清理指定天数之前的审计日志
      */
     @DeleteMapping("/audit-logs/cleanup")
-    public ResponseEntity<?> cleanupAuditLogs(@RequestParam int daysAgo) {
+    public ResponseEntity<?> cleanupAuditLogs(@RequestParam int daysAgo,
+                                              @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        ResponseEntity<?> rejected = requireDangerConfirm(confirm);
+        if (rejected != null) return rejected;
         if (daysAgo <= 0) {
             return ResponseEntity.badRequest().body(Map.of(
                 "ok", false,

@@ -493,7 +493,11 @@ public class SourceController {
     }
 
     @DeleteMapping("/sources/{id}")
-    public Map<String, Object> delete(@PathVariable String id) {
+    public Map<String, Object> delete(@PathVariable String id,
+                                      @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
+        if (!"true".equalsIgnoreCase(confirm)) {
+            return Map.of("success", false, "error", "请先确认危险操作");
+        }
         try {
             // 获取源码包信息
             var sp = repo.findById(id);

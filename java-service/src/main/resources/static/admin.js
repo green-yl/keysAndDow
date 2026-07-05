@@ -14,6 +14,11 @@ const authFetch = async (url, options = {}) => {
     return resp;
 };
 
+const dangerFetch = (url, options = {}) => authFetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), 'X-Admin-Confirm': 'true' }
+});
+
 // 退出登录
 async function adminLogout() {
     try {
@@ -363,7 +368,7 @@ async function clearAllAuditLogs() {
     }
     
     try {
-        const response = await authFetch('/api/admin/audit-logs', {
+        const response = await dangerFetch('/api/admin/audit-logs', {
             method: 'DELETE'
         });
         
@@ -397,7 +402,7 @@ async function cleanupOldAuditLogs() {
     }
     
     try {
-        const response = await fetch(`/api/admin/audit-logs/cleanup?daysAgo=${daysNumber}`, {
+        const response = await dangerFetch(`/api/admin/audit-logs/cleanup?daysAgo=${daysNumber}`, {
             method: 'DELETE'
         });
         
@@ -464,7 +469,7 @@ async function deletePlan(id) {
     if (!confirm('确定要删除这个套餐吗？')) return;
     
     try {
-        const response = await fetch(`/api/admin/plans/${id}`, {
+        const response = await dangerFetch(`/api/admin/plans/${id}`, {
             method: 'DELETE'
         });
         
@@ -569,7 +574,7 @@ async function deleteCode(code) {
     if (!confirm('确定要删除这个激活码吗？\n注意：这将同时删除该激活码对应的所有许可证，此操作不可恢复！')) return;
     
     try {
-        const response = await fetch(`/api/admin/codes/${code}`, {
+        const response = await dangerFetch(`/api/admin/codes/${code}`, {
             method: 'DELETE',
             headers: {
                 'Content-Type': 'application/json'
@@ -624,7 +629,7 @@ async function renewLicense(id) {
     const resetQuota = confirm('是否重置下载额度？');
     
     try {
-        const response = await fetch(`/api/admin/licenses/${id}/renew`, {
+        const response = await dangerFetch(`/api/admin/licenses/${id}/renew`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -654,7 +659,7 @@ async function addQuota(id) {
     if (!extra) return;
     
     try {
-        const response = await fetch(`/api/admin/licenses/${id}/add-quota`, {
+        const response = await dangerFetch(`/api/admin/licenses/${id}/add-quota`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -683,7 +688,7 @@ async function revokeLicense(id) {
     if (!reason) return;
     
     try {
-        const response = await fetch(`/api/admin/licenses/${id}/revoke`, {
+        const response = await dangerFetch(`/api/admin/licenses/${id}/revoke`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -971,7 +976,7 @@ async function deleteSource(id) {
     if (!confirm('确定要删除这个源码吗？')) return;
     
     try {
-        const response = await fetch(`/api/sources/${id}`, {
+        const response = await dangerFetch(`/api/sources/${id}`, {
             method: 'DELETE'
         });
         
