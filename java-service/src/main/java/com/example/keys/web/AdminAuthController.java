@@ -2,12 +2,16 @@ package com.example.keys.web;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
+import com.example.keys.model.AuditLog;
+import com.example.keys.repo.AuditLogRepository;
 import com.example.keys.util.IpUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -18,6 +22,14 @@ import java.util.Map;
 @RequestMapping("/api/auth/admin")
 @CrossOrigin(origins = "*", maxAge = 3600)
 public class AdminAuthController {
+
+    private static final Logger log = LoggerFactory.getLogger(AdminAuthController.class);
+
+    private final AuditLogRepository auditLogRepository;
+
+    public AdminAuthController(AuditLogRepository auditLogRepository) {
+        this.auditLogRepository = auditLogRepository;
+    }
 
     @Value("${app.admin.username:suolongshinidie}")
     private String adminUsername;
@@ -42,6 +54,7 @@ public class AdminAuthController {
 
         LoginFailure failure = loginFailures.get(failureKey);
         if (failure != null && failure.isLocked()) {
+            recordAudit("admin_login_locked", username, request);
             return ResponseEntity.status(429).body(Map.of("ok", false, "error", "登录失败次数过多，请稍后再试"));
         }
 
@@ -51,11 +64,25 @@ public class AdminAuthController {
             request.changeSessionId();
             session.setAttribute(SESSION_KEY, true);
             session.setMaxInactiveInterval(7200); // 2 hours
+            recordAudit("admin_login_success", username, request);
             return ResponseEntity.ok(Map.of("ok", true));
         }
 
         recordLoginFailure(failureKey);
+        recordAudit("admin_login_failed", username, request);
         return ResponseEntity.status(401).body(Map.of("ok", false, "error", "账号或密码错误"));
+    }
+
+    private void recordAudit(String action, String username, HttpServletRequest request) {
+        try {
+            String actor = username == null || username.isBlank() ? "admin:unknown" : "admin:" + username.trim();
+            String ip = IpUtils.getClientIpAddress(request);
+            String ua = request.getHeader("User-Agent");
+            auditLogRepository.insert(new AuditLog(actor, action, "admin-login",
+                    "ip=" + ip + ", ua=" + (ua == null ? "" : ua)));
+        } catch (Exception e) {
+            log.warn("写入后台登录审计失败: {}", e.getMessage());
+        }
     }
 
     private String loginFailureKey(HttpServletRequest request, String username) {

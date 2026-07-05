@@ -1,8 +1,11 @@
 package com.example.keys.web;
 
 import com.example.keys.model.*;
+import com.example.keys.repo.AuditLogRepository;
 import com.example.keys.service.AdminService;
 import com.example.keys.service.ServerManagementService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
@@ -15,21 +18,37 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/admin")
 public class AdminController {
+    private static final Logger log = LoggerFactory.getLogger(AdminController.class);
     
     @Autowired
     private AdminService adminService;
     
     @Autowired
     private ServerManagementService serverManagementService;
+
+    @Autowired
+    private AuditLogRepository auditLogRepository;
     
     private ResponseEntity<?> requireDangerConfirm(String confirm) {
         if ("true".equalsIgnoreCase(confirm)) {
             return null;
         }
+        recordDangerRejected();
         return ResponseEntity.status(428).body(Map.of(
             "ok", false,
             "error", "请先确认危险操作"
         ));
+    }
+
+    private void recordDangerRejected() {
+        try {
+            var request = ((org.springframework.web.context.request.ServletRequestAttributes)
+                    org.springframework.web.context.request.RequestContextHolder.currentRequestAttributes()).getRequest();
+            auditLogRepository.insert(new AuditLog("admin", "danger_confirm_rejected", request.getRequestURI(),
+                    "method=" + request.getMethod() + ", ip=" + request.getRemoteAddr()));
+        } catch (Exception e) {
+            log.warn("写入危险操作拒绝审计失败: {}", e.getMessage());
+        }
     }
 
     /**

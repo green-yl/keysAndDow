@@ -1,6 +1,8 @@
 package com.example.keys.web;
 
+import com.example.keys.model.AuditLog;
 import com.example.keys.model.SourcePackage;
+import com.example.keys.repo.AuditLogRepository;
 import com.example.keys.repo.SourcePackageRepository;
 import com.example.keys.service.StorageService;
 import com.example.keys.service.S3Service;
@@ -10,6 +12,8 @@ import com.example.keys.service.DownloadReceiptService;
 import com.example.keys.service.ServerManagementService;
 import com.example.keys.service.LicenseSignatureService;
 import com.example.keys.service.SourceAccessService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 
 import org.springframework.util.StringUtils;
@@ -36,7 +40,9 @@ import java.util.UUID;
 @CrossOrigin(origins = "*", maxAge = 3600, allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
 @RequestMapping("/api")
 public class SourceController {
+    private static final Logger log = LoggerFactory.getLogger(SourceController.class);
     private final SourcePackageRepository repo;
+    private final AuditLogRepository auditLogRepository;
     private final StorageService storage;
     private final ZipService zip;
     private final S3Service s3;
@@ -46,13 +52,14 @@ public class SourceController {
     private final SourceAccessService sourceAccessService;
     private final DownloadReceiptService downloadReceiptService;
 
-    public SourceController(SourcePackageRepository repo, StorageService storage, ZipService zip, 
+    public SourceController(SourcePackageRepository repo, AuditLogRepository auditLogRepository, StorageService storage, ZipService zip,
                            S3Service s3, AuthorizationService authorizationService, 
                            ServerManagementService serverManagementService,
                            LicenseSignatureService licenseSignatureService,
                            SourceAccessService sourceAccessService,
                            DownloadReceiptService downloadReceiptService) {
         this.repo = repo; 
+        this.auditLogRepository = auditLogRepository;
         this.storage = storage; 
         this.zip = zip; 
         this.s3 = s3;
@@ -496,6 +503,7 @@ public class SourceController {
     public Map<String, Object> delete(@PathVariable String id,
                                       @RequestHeader(value = "X-Admin-Confirm", required = false) String confirm) {
         if (!"true".equalsIgnoreCase(confirm)) {
+            recordSourceAudit("danger_confirm_rejected", id, "删除源码缺少确认头");
             return Map.of("success", false, "error", "请先确认危险操作");
         }
         try {
@@ -584,11 +592,20 @@ public class SourceController {
             
             // 物理删除数据库记录
             repo.hardDelete(id);
+            recordSourceAudit("delete_source", id, "name=" + sp.getName() + ", codeName=" + sp.getCodeName() + ", filesDeleted=" + filesDeleted);
             
             return Map.of("success", true, "message", "源码包已彻底删除", "filesDeleted", filesDeleted);
             
         } catch (Exception e) {
             return Map.of("success", false, "error", "删除失败: " + e.getMessage());
+        }
+    }
+
+    private void recordSourceAudit(String action, String id, String details) {
+        try {
+            auditLogRepository.insert(new AuditLog("admin", action, "source:" + id, details));
+        } catch (Exception e) {
+            log.warn("写入源码操作审计失败: {}", e.getMessage());
         }
     }
 
